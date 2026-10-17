@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
+# Modified 2026-10-17: require unambiguous DIAG identity and selected ADB serial.
 """Диаг-транспорт Qualcomm QCDM/HDLC поверх USB (Linux + Windows, без WSL).
 
 Единственная зависимость: pyusb (+ libusb-1.0 и, на Windows, WinUSB-драйвер
-на DIAG-интерфейсе телефона — см. TOOLS.md).
+на DIAG-интерфейсе телефона — см. README.md#drivers).
 
 Диаг-интерфейс появляется в USB только в композиции diag,modem,adb
-(см. guide/02-diag-mode.md): VID 0482, PID 0A9D, interface #0,
+(см. README.md#diagnostics): VID 0482, PID 0A9D, interface #0,
 bulk OUT 0x01 / bulk IN 0x81.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
@@ -91,14 +93,22 @@ class DiagTransport:
 
     def __init__(self, quiet: bool = True):
         self.quiet = quiet
-        self.dev = usb.core.find(idVendor=VID, idProduct=PID)
-        if self.dev is None:
+        self.last_error = None
+        self._closed = False
+        devices = list(usb.core.find(idVendor=VID, idProduct=PID, find_all=True))
+        if not devices:
             raise RuntimeError(
                 f"USB {VID:04x}:{PID:04x} не найден. Проверьте: (1) телефон в "
-                "композиции diag,modem,adb (guide/02-diag-mode.md); "
+                "композиции diag,modem,adb (README.md#diagnostics); "
                 "(2) на Windows установлен WinUSB-драйвер на диаг-интерфейс "
-                "(TOOLS.md); (3) права/udev на Linux."
+                "(README.md#drivers); (3) права/udev на Linux."
             )
+        if len(devices) != 1:
+            raise RuntimeError("Подключено несколько BALMUDA DIAG-устройств. Оставьте одно.")
+        self.dev = devices[0]
+        expected_serial = os.environ.get("ANDROID_SERIAL")
+        if expected_serial and self.dev.serial_number != expected_serial:
+            raise RuntimeError("Серийный номер DIAG не совпадает с выбранным ADB. Запись запрещена.")
         cfg = self.dev.get_active_configuration()
         try:
             if self.dev.is_kernel_driver_active(INTERFACE):
@@ -113,6 +123,7 @@ class DiagTransport:
             elif ep.bEndpointAddress == EP_IN:
                 self.ep_in = ep
         if self.ep_out is None or self.ep_in is None:
+            self.close()
             raise RuntimeError("DIAG endpoints 0x01/0x81 не найдены")
         # Режим TX-фрейма: с CRC (ядро в HDLC-режиме) или без (non-HDLC).
         # Пока неизвестен — стартуем с CRC (правильный режим для чистого
@@ -133,6 +144,9 @@ class DiagTransport:
 
     def xfer(self, payload: bytes, timeout: int = USB_TIMEOUT_MS,
              tries: int = REQUEST_TRIES) -> bytes | None:
+        if tries < 1 or timeout < 1:
+            raise ValueError("positive tries and timeout required")
+        self.last_error = None
         self.drain()
         for attempt in range(1, tries + 1):
             pkt = frame(payload, self._use_crc)
@@ -140,19 +154,23 @@ class DiagTransport:
             try:
                 self.dev.write(self.ep_out, pkt, timeout)
                 raw = bytearray()
+                receive_error = None
                 deadline = time.monotonic() + timeout / 1000.0
                 while time.monotonic() < deadline:
                     try:
                         chunk = bytes(self.ep_in.read(4096, timeout=200))
                         raw += chunk
-                    except usb.core.USBError:
+                    except usb.core.USBError as error:
+                        receive_error = error
                         if raw:
                             break
                         continue
                     if raw and raw.endswith(b"\x7E"):
                         break
                 if not raw:
-                    raise usb.core.USBError("timeout")
+                    if receive_error is not None:
+                        raise receive_error
+                    raise usb.core.USBError("timeout waiting for DIAG reply")
                 # снять HDLC-обёртку, проверить CRC
                 for frame_bytes in bytes(raw).split(b"\x7E"):
                     if not frame_bytes:
@@ -172,9 +190,13 @@ class DiagTransport:
                                      "(ядро в non-HDLC режиме)")
                             raise usb.core.USBError("hdlc mode mismatch")
                         self.log(f"RX PAYLOAD: {data.hex(' ')}")
+                        self.last_error = None
                         return data
                 raise usb.core.USBError("bad crc")
             except usb.core.USBError as e:
+                self.last_error = (f"{type(e).__name__}: {e}; errno={getattr(e, 'errno', None)}, "
+                                   f"backend={getattr(e, 'backend_error_code', None)}; "
+                                   f"attempt={attempt}/{tries}")
                 self.log(f"попытка {attempt} не удалась: {e}")
                 if attempt == tries:
                     return None
@@ -186,8 +208,14 @@ class DiagTransport:
         return r is not None and len(r) >= 2
 
     def close(self):
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         try:
             usb.util.release_interface(self.dev, INTERFACE)
+        except Exception:
+            pass
+        try:
             usb.util.dispose_resources(self.dev)
         except Exception:
             pass

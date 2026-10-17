@@ -2,3 +2,16 @@ tools/__pycache__/
 tools/p31317.txt
 chkcode_backup*.bin
 chkcode_backup*.sha256
+chkcode_backup*.device.json
+chkcode_zero.img
+p31317.txt
+__pycache__/
+.unlock.lock
+.unlock-state-*.tmp
+cve_cleanup.device.json
+host-tools/
+device-reports/
+.local-notes/
+.venv/
+.pytest_cache/
+.test-unmuda-*/

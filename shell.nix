@@ -5,13 +5,8 @@
 #   nix-shell            # из корня репозитория
 #   cd tools && python3 cve31317.py ...
 #
-# Замечания:
-#  - udev-правила для USB без root на NixOS:
-#      services.udev.extraRules = ''
-#        SUBSYSTEM=="usb", ATTR{idVendor}=="0482", MODE="0666"
-#      '';
-#    На обычном Linux можно temporary: sudo chmod 666 /dev/bus/usb/*/* или udev-файл из TOOLS.md.
-#  - На не-NixOS дистрибутивах без nix — ставить по TOOLS.md репозитория.
+# Доступ к USB настраивается отдельно через udev с учётом дистрибутива.
+# Зависимости и настройка прав: README.md#setup.
 
 { pkgs ? import <nixpkgs> {} }:
 

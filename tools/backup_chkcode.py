@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified 2026-10-17: verified double-read backups; never overwrite originals.
 """backup_chkcode.py — дамп раздела chkcode через fs_sys_call (БЕЗ анлока).
 
 Обязательный первый шаг перед любой записью в chkcode.
@@ -11,31 +12,36 @@ blk_file open/read/write именно для chkcode_block_device — это е�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
-from diag_transport import open_transport
-from fs_sys_call import FSDiag
+from chkcode_backup import CHKCODE_SIZE, require_new_backup, save_backup, validate_data
 
 CHKCODE_PATH = "/dev/block/bootdevice/by-name/chkcode"
-CHKCODE_SIZE = 0x80000
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", default="chkcode_backup.bin")
     a = ap.parse_args()
-    tr = open_transport()
-    fs = FSDiag(tr)
-    print(f"Читаю {CHKCODE_PATH} ({CHKCODE_SIZE} байт)...")
-    data = fs.read_file(CHKCODE_PATH, CHKCODE_SIZE)
-    if len(data) != CHKCODE_SIZE:
-        print(f"ВНИМАНИЕ: прочитано {len(data)} вместо {CHKCODE_SIZE}", file=sys.stderr)
     out = Path(a.out)
-    out.write_bytes(data)
-    digest = hashlib.sha256(data).hexdigest()
-    (out.with_suffix(".sha256")).write_text(f"{digest}  {out.name}\n")
+    require_new_backup(out)
+    from diag_transport import open_transport
+    from fs_sys_call import FSDiag
+
+    tr = open_transport()
+    try:
+        fs = FSDiag(tr)
+        print(f"Двойное чтение {CHKCODE_PATH} ({CHKCODE_SIZE} байт)...")
+        data = fs.read_file(CHKCODE_PATH, CHKCODE_SIZE)
+        validate_data(data)
+        second = fs.read_file(CHKCODE_PATH, CHKCODE_SIZE)
+        validate_data(second)
+        if data != second:
+            raise ValueError("Повторное чтение chkcode не совпало. Запись запрещена.")
+    finally:
+        tr.close()
+    digest = save_backup(out, data)
     print(f"Сохранено: {out} ({len(data)} байт)")
     print(f"SHA-256: {digest}")
     print(f"Первые 16 байт: {data[:16].hex(' ')}")

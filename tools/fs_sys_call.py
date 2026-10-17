@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified 2026-10-17: never blindly retry writes with an advancing file offset.
 """fs_sys_call — файловые операции через DIAG-бэкдор Kyocera (subsys 0xFC, cmd 0x2000).
 
 Обработчик живёт в демоне /vendor/bin/fs_sys_call_diag (uid=system, gid=root).
@@ -7,7 +8,7 @@ chkcode (u:object_r:chkcode_block_device). Обычные файлы — по п
 домена fs_sys_call_diag (шире, но не безгранично: /proc, /sys, часть /vendor).
 
 Требует запущенного класса демонов kc_diag:
-  vendor.kc.diag.status=start (ставится через kdiag_shell.py, см. гайд 02/04)
+  vendor.kc.diag.status=start (через kdiag_shell.py, см. README.md#diagnostics)
 
 Протокол (проверен на A101BM 1.280PO.0686.a):
   запрос:  4B FC 00 20 | u16 subcmd | аргументы
@@ -25,6 +26,7 @@ from __future__ import annotations
 import argparse
 import struct
 import sys
+import time
 from pathlib import Path
 
 from diag_transport import open_transport
@@ -33,8 +35,7 @@ SUBSYS_OPEN, SUBSYS_CLOSE, SUBSYS_READ, SUBSYS_WRITE, SUBSYS_LSEEK = 0, 1, 2, 3,
 MAXRW = 0x400
 
 # эхо-ответы DIAG: первый байт 0x13/0x14/0x15/0x18 = команда отвергнута ядром
-# DIAG, в теле приходит ЭХО запроса — раньше парсер принимал его за ответ
-# и неверно диагностировал «нет слотов» (реальный случай на remote-юните)
+# DIAG; тело содержит эхо запроса, а не результат файловой операции.
 DIAG_ERR_RSP = {0x13: "BAD_CMD", 0x14: "BAD_PARM", 0x15: "BAD_LEN", 0x18: "BAD_MODE"}
 
 O_RDONLY, O_WRONLY, O_RDWR = 0, 1, 2
@@ -52,12 +53,16 @@ class FSDiag:
 
     def _call(self, sub: int, args: bytes = b"", data: bytes = b""):
         payload = bytes([0x4B, 0xFC, 0x00, 0x20]) + struct.pack("<H", sub) + args + data
-        r = self.tr.xfer(payload)
+        # Both reads and writes advance the file offset. A lost reply must not
+        # cause a blind repeat at the NEXT offset. Control reads retry by seeking.
+        r = self.tr.xfer(payload, tries=1) if sub in (SUBSYS_READ, SUBSYS_WRITE) else self.tr.xfer(payload)
         if self.debug:
             print(f"[dbg] req : {payload[:32].hex(' ')}{'...' if len(payload) > 32 else ''}")
             print(f"[dbg] resp: {r.hex(' ') if r else '(нет ответа)'}")
         if r is None:
-            raise FSError("нет ответа от fs_sys_call_diag (демон запущен? см. гайд)")
+            detail = getattr(self.tr, "last_error", None) or "причина транспортом не уточнена"
+            raise FSError("нет ответа fs_sys_call_diag; проверьте USB/драйвер и состояние демона. "
+                          f"Последняя ошибка транспорта: {detail}")
         if len(r) < 8:
             raise FSError(f"короткий ответ: {r.hex()}")
         if r[0] in DIAG_ERR_RSP:
@@ -105,25 +110,53 @@ class FSDiag:
         return closed
 
     def read(self, fd: int, count: int = MAXRW) -> bytes:
+        if count < 0:
+            raise ValueError("read count must be nonnegative")
         count = min(count, MAXRW)
         result, retval, errno, data = self._call(SUBSYS_READ, struct.pack("<II", fd, count))
         if result == 0xFFFF:
             raise FSError(f"read(fd={fd}): errno={errno}")
-        return data[: int(retval or 0)]
+        if retval is None or retval > count or len(data) < retval:
+            raise FSError(f"read(fd={fd}): некорректная длина ответа "
+                          f"(requested={count}, reported={retval}, received={len(data)})")
+        return data[:retval]
 
     def write(self, fd: int, data: bytes) -> int:
-        assert len(data) <= MAXRW
+        if len(data) > MAXRW:
+            raise ValueError(f"write length {len(data)} exceeds MAXRW={MAXRW}")
         args = struct.pack("<I", fd) + struct.pack("<I", len(data))
         result, retval, errno, _ = self._call(SUBSYS_WRITE, args, data)
         if result == 0xFFFF:
             raise FSError(f"write(fd={fd}): errno={errno}")
-        return int(retval or 0)
+        if retval is None or retval > len(data):
+            raise FSError(f"write(fd={fd}): некорректное число записанных байт: {retval}")
+        return int(retval)
 
     def lseek(self, fd: int, offset: int, whence: int = SEEK_SET) -> int:
         result, retval, errno, _ = self._call(SUBSYS_LSEEK, struct.pack("<Iii", fd, offset, whence))
         if result == 0xFFFF:
             raise FSError(f"lseek(fd={fd}): errno={errno}")
         return int(retval or 0)
+
+    def verify_at(self, fd: int, offset: int, expected: bytes, attempts: int = 3) -> bytes:
+        """Retry only reads; seek to the original offset before EACH attempt."""
+        if not 0 < len(expected) <= MAXRW or attempts < 1:
+            raise ValueError("verify_at requires 1..MAXRW expected bytes and positive attempts")
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                if self.lseek(fd, offset, SEEK_SET) != offset:
+                    raise FSError("контрольное чтение: lseek вернул другое смещение")
+                data = self.read(fd, len(expected))
+                if data != expected:
+                    raise FSError(f"контрольные байты не совпали: {data.hex(' ')}")
+                return data
+            except FSError as error:
+                last_error = error
+                if attempt + 1 < attempts:
+                    time.sleep(0.2)
+        raise FSError(f"контрольное чтение не подтверждено после {attempts} попыток; "
+                      f"запись не повторялась. Последняя ошибка: {last_error}") from last_error
 
     # --- высокоуровневые ---------------------------------------------------
     def read_file(self, path: str, size: int, chunk: int = MAXRW, progress=print) -> bytes:
@@ -149,7 +182,12 @@ class FSDiag:
             self.lseek(fd, 0, SEEK_SET)
             sent = 0
             while sent < len(data):
-                sent += self.write(fd, data[sent:sent + MAXRW])
+                piece = data[sent:sent + MAXRW]
+                written = self.write(fd, piece)
+                if written != len(piece):
+                    raise FSError(f"write_file: записано {written} из {len(piece)}; "
+                                  "остановка без повторной записи")
+                sent += written
             return sent
         finally:
             self.close(fd)
@@ -168,20 +206,23 @@ def main():
                     help="печатать сырые запросы/ответы DIAG (hex)")
     a = ap.parse_args()
 
-    fs = FSDiag(debug=a.debug)
-    if a.close_slots:
-        closed = fs.close_all()
-        print("закрыты слоты:", closed if closed else "(все уже были свободны)")
-        return 0
-    if not a.path:
+    if not a.path and not a.close_slots:
         ap.error("нужен path (или --close-slots)")
-
-    data = fs.read_file(a.path, a.size)
-    if a.outfile:
-        Path(a.outfile).write_bytes(data)
-        print(f"Сохранено {len(data)} байт -> {a.outfile}")
-    else:
-        print(data.hex(" "))
+    tr = open_transport()
+    try:
+        fs = FSDiag(tr, debug=a.debug)
+        if a.close_slots:
+            closed = fs.close_all()
+            print("закрыты слоты:", closed if closed else "(все уже были свободны)")
+            return 0
+        data = fs.read_file(a.path, a.size)
+        if a.outfile:
+            Path(a.outfile).write_bytes(data)
+            print(f"Сохранено {len(data)} байт -> {a.outfile}")
+        else:
+            print(data.hex(" "))
+    finally:
+        tr.close()
     return 0
 
 

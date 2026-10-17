@@ -2,11 +2,12 @@
 """at_console — AT-команды модему через USB interface 1 (bulk 0x02/0x82).
 
 Работает и на Linux, и на Windows (нужен только pyusb; на Windows —
-WinUSB/Zadig на интерфейс, см. TOOLS.md; на Linux при занятом qcserial:
+WinUSB/Zadig на интерфейс, см. README.md#drivers; на Linux при занятом qcserial:
 sudo rmmod qcserial).
 
-Требует diag-композицию (гайд 02). Read-only диагностика: ATI, AT+CLAC,
-AT$QCPDPP? и т.п.
+Требует diag-композицию (README.md#diagnostics). Принимает произвольные
+AT-команды; режим только для чтения не обеспечивается. Выбирает первое
+подходящее устройство без проверки serial. Не входит в сценарий анлока.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ EP_OUT, EP_IN = 0x02, 0x82
 def open_modem():
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        raise RuntimeError("0482:0a9d не найден — включите diag-композицию (гайд 02)")
+        raise RuntimeError("0482:0a9d не найден — включите diag-композицию (README.md#diagnostics)")
     try:
         if dev.is_kernel_driver_active(IFACE):
             dev.detach_kernel_driver(IFACE)

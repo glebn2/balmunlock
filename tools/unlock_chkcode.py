@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified 2026-10-17: validate the backup and live partition before writing.
 """unlock_chkcode.py — запись сервисной магии LOOTBFCK в chkcode (шаг анлока).
 
 ЧТО ДЕЛАЕТ (проверено на A101BM 1.280PO.0686.a):
@@ -8,24 +9,20 @@
     2) пропускает проверки IsUnlocked/IsCriticalPartition внутри flash/erase;
     3) ПОБОЧНОЕ ДЕЙСТВИЕ: при каждой загрузке входит в fastboot-режим
        (BootIntoFastboot=TRUE) — Android сам НЕ ЗАГРУЗИТСЯ, пока магия
-       не снята! Возврат: fastboot flash chkcode нулей (см. guide/05).
+       не снята! Возврат: проверенный исходный бэкап (см. README.md#recovery).
 
-Скрипт отказывается работать без
-существующего бэкапа chkcode рядом (п1 чек-листа).
+Скрипт требует полный исходный бэкап chkcode с корректной SHA-256
+и совпадение текущего раздела с этим бэкапом перед записью.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
-from diag_transport import open_transport
-from fs_sys_call import FSDiag, O_RDWR, SEEK_SET
+from chkcode_backup import CHKCODE_SIZE, MAGIC, load_backup
 
 CHKCODE_PATH = "/dev/block/bootdevice/by-name/chkcode"
-MAGIC = b"LOOTBFCK"
-CHUNK = 0x400
 
 
 def main():
@@ -36,9 +33,10 @@ def main():
     a = ap.parse_args()
 
     backup = Path(a.backup)
-    if not backup.exists():
-        print(f"ОТКАЗ: нет бэкапа {backup}. Сначала запустите backup_chkcode.py "
-              "(без бэкапа — никак).", file=sys.stderr)
+    try:
+        original = load_backup(backup)
+    except (OSError, ValueError) as error:
+        print(f"ОТКАЗ: {error}", file=sys.stderr)
         return 2
 
     if not a.yes:
@@ -48,27 +46,41 @@ def main():
             print("Отменено.")
             return 1
 
+    from diag_transport import open_transport
+    from fs_sys_call import FSDiag, FSError, O_RDWR, SEEK_SET
+
     tr = open_transport()
-    fs = FSDiag(tr)
-    fd = fs.open(CHKCODE_PATH, O_RDWR)
     try:
-        fs.lseek(fd, 0, SEEK_SET)
-        n = fs.write(fd, MAGIC)
-        if n != len(MAGIC):
-            print(f"ОТКАЗ: записано {n} байт вместо {len(MAGIC)}", file=sys.stderr)
-            return 1
-        fs.lseek(fd, 0, SEEK_SET)
-        back = fs.read(fd, 16)
-        print("Контрольное чтение (первые 16):", back.hex(" "))
-        if back[:8] != MAGIC:
-            print("ОШИБКА: магия не подтвердилась! Восстановите бэкап:", file=sys.stderr)
-            print(f"  python fs_sys_call.py {CHKCODE_PATH} ... (см. guide/05)", file=sys.stderr)
-            return 1
+        fs = FSDiag(tr)
+        # A valid file alone does not prove it belongs to the connected phone.
+        if fs.read_file(CHKCODE_PATH, CHKCODE_SIZE) != original:
+            print("ОТКАЗ: текущий chkcode не совпадает с бэкапом. Записи не было.",
+                  file=sys.stderr)
+            return 2
+        fd = fs.open(CHKCODE_PATH, O_RDWR)
+        try:
+            fs.lseek(fd, 0, SEEK_SET)
+            n = fs.write(fd, MAGIC)
+            if n != len(MAGIC):
+                print(f"ОТКАЗ: записано {n} байт вместо {len(MAGIC)}", file=sys.stderr)
+                return 1
+            try:
+                back = fs.verify_at(fd, 0, MAGIC + original[8:16])
+            except FSError as error:
+                print(f"Не удалось подтвердить результат записи: {error}", file=sys.stderr)
+                print("Метка могла быть записана. Общий сценарий попробует откат; "
+                      "при прямом запуске утилиты не перезагружайте телефон, "
+                      "см. README.md#recovery.", file=sys.stderr)
+                return 1
+            print("Контрольное чтение (первые 16):", back.hex(" "))
+        finally:
+            fs.close(fd)
         print("OK: LOOTBFCK записан и подтверждён.")
         print("Далее: adb reboot bootloader -> fastboot flashing unlock ->")
-        print("подтвердить ГРОМКОСТЬ ВВЕРХ на экране телефона. См. guide/04.")
+        print("выбрать разблокировку кнопками громкости и подтвердить по подсказке экрана "
+              "(на проверенном A101BM — кнопкой питания). См. README.md#usage.")
     finally:
-        fs.close(fd)
+        tr.close()
     return 0
 
 
