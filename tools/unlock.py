@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Shared RU/EN unlock workflow. --preflight never invokes ADB or opens USB."""
+# Modified 2026-10-18: persistent paths and helper dispatch for the console EXE.
 from __future__ import annotations
 
 import argparse
@@ -20,8 +21,13 @@ from cve_cleanup import STATE_NAME, CleanupError, cleanup_pending
 from device_policy import validate_identity
 from operation_signals import OperationSignals
 from session_lock import session_lock
+from runtime_paths import frozen, session_root, tool_command
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = session_root()
+
+
+def recovery_command():
+    return ".\\unmuda.exe --recover" if frozen() else "python tools/unlock.py --recover"
 
 
 class Stop(RuntimeError):
@@ -104,7 +110,7 @@ class Workflow:
         if exclusive_diag:
             self.run(["adb", "kill-server"])
         try:
-            result = self.run([sys.executable, ROOT / "tools" / name, *args], timeout=timeout)
+            result = self.run(tool_command(name, *args, root=ROOT), timeout=timeout)
         finally:
             if exclusive_diag:
                 try:
@@ -318,9 +324,9 @@ class Workflow:
             time.sleep(1)
         self.save_state("recovery_pending", recovery_error=last_error)
         self.say("Автооткат не завершён. Бэкап и состояние сохранены. "
-                 "После восстановления USB: python tools/unlock.py --recover",
+                 f"После восстановления USB: {recovery_command()}",
                  "Automatic rollback incomplete. Backup/state retained. "
-                 "After restoring USB: python tools/unlock.py --recover")
+                 f"After restoring USB: {recovery_command()}")
         print(last_error, file=sys.stderr, flush=True)
         return False
 
@@ -499,9 +505,9 @@ class Workflow:
             self.say("chkcode восстановлен; завершение перезагрузки пока не подтверждено.",
                      "chkcode restored; reboot completion is still pending.")
         self.say("Не запускайте полный анлок заново. "
-                 "Для продолжения восстановления: python tools/unlock.py --recover",
+                 f"Для продолжения восстановления: {recovery_command()}",
                  "Do not rerun full unlock. "
-                 "To resume recovery: python tools/unlock.py --recover")
+                 f"To resume recovery: {recovery_command()}")
         print(f"Serial: {self.serial}\nBackup: {self.backup}\nSecond copy: {self.recovery_backup}"
               f"\nReceipt: {self.receipt}", flush=True)
 

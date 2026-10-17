@@ -15,3 +15,5 @@ device-reports/
 .venv/
 .pytest_cache/
 .test-unmuda-*/
+.build/
+dist/

@@ -1,6 +1,7 @@
 """Owned cleanup receipt for the temporary Android settings used by cve31317.
 
 Modified 2026-10-17. No exploit, partition access or bootloader operations.
+Modified 2026-10-18: keep the receipt beside the packaged executable.
 """
 from __future__ import annotations
 
@@ -11,9 +12,10 @@ import re
 import shlex
 import subprocess
 import time
+from runtime_paths import session_root
 
 STATE_NAME = "cve_cleanup.device.json"
-DEFAULT_STATE = Path(__file__).resolve().parent.parent / STATE_NAME
+DEFAULT_STATE = session_root() / STATE_NAME
 PAYLOAD_PATH = "/data/local/tmp/p31317.txt"
 HIDDEN_GET = "settings get global hidden_api_blacklist_exemptions"
 USAP_GET = "device_config get activity_manager native_usap_pool_enabled"

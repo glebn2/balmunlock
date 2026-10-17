@@ -1,0 +1,80 @@
+name: Windows portable build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag matching runtime_paths.VERSION
+        default: v0.1.0
+        required: true
+        type: string
+      publish_release:
+        description: Publish a preview GitHub Release after checks pass
+        default: false
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  linux-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.7'
+      - run: python -m pip install -r tools/requirements.txt
+      - run: python -m unittest discover -s tests -q
+
+  windows-build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13.7'
+          architecture: x64
+      - run: python -m pip install --require-hashes -r requirements-windows.txt -r build-support/requirements.txt
+      - run: python -m pip check
+      - run: python -m unittest discover -s tests -q
+      - run: python build-support/build_windows.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unmuda-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+    needs: [linux-tests, windows-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unmuda-windows-x64
+          path: release-assets
+      - name: Publish preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          version="$(python -c 'import sys; sys.path.insert(0, "tools"); from runtime_paths import VERSION; print(VERSION)')"
+          test "$RELEASE_TAG" = "v$version"
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "unmuda $RELEASE_TAG — Windows x64 preview" --prerelease \
+            --notes-file build-support/release-notes.txt

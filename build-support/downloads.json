@@ -1,0 +1,19 @@
+{
+  "platform_tools": {
+    "filename": "platform-tools-r37.0.1-win.zip",
+    "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip",
+    "sha256": "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99"
+  },
+  "sources": [
+    {
+      "filename": "libusb-package-source.zip",
+      "url": "https://codeload.github.com/pyocd/libusb-package/zip/3ea4db141ef013c070f28738cae6ee8ed85688be",
+      "sha256": "a215c348d0c6b3f1e7ee2d57cce602d5ce092e13a288b2df0174dc7e4b67dbd7"
+    },
+    {
+      "filename": "libusb-source.zip",
+      "url": "https://codeload.github.com/libusb/libusb/zip/87a55632db62c9bdc58cd31d3ccfa673f1bb017f",
+      "sha256": "bde19251706e1f50fa4b7697b3a011889b46f2820cf14764770eb2c8b68dc0e1"
+    }
+  ]
+}

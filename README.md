@@ -6,7 +6,7 @@
 
 > **Разблокировка стирает пользовательские данные.** Сохраните нужные файлы отдельно. Бэкап `chkcode` предназначен для восстановления служебного раздела и не содержит ваших фотографий и документов. Риск повреждения устройства полностью исключить нельзя.
 
-Это CLI-приложение. Сейчас оно запускается из исходников; готовой EXE-сборки пока нет. Изменения форка написаны с помощью модели **GPT-6.1 Sol**.
+Это CLI-приложение. Для Windows доступна portable-сборка в [GitHub Releases](https://github.com/glebn2/unmuda/releases): распакуйте ZIP и запустите `unmuda.exe` из PowerShell. Python и зависимости включены. Изменения форка написаны с помощью модели **GPT-6.1 Sol**.
 
 - [Совместимость](#compatibility)
 - [Windows](#windows)
@@ -37,6 +37,17 @@
 
 ### Установка
 
+1. Скачайте `unmuda-v0.1.0-windows-x64.zip` и файл `.sha256` из [релизов](https://github.com/glebn2/unmuda/releases).
+2. Распакуйте весь ZIP в доступную для записи папку. Сохраните рядом с `unmuda.exe` каталоги `_internal`, `platform-tools` и `tools`.
+3. Откройте PowerShell в этой папке. Устанавливать Python, PyUSB и Platform-Tools отдельно не нужно.
+
+Проверить SHA-256 архива можно командой `Get-FileHash .\unmuda-v0.1.0-windows-x64.zip -Algorithm SHA256`. Сверьте результат с опубликованным `.sha256`. Сборка preview не подписана цифровой подписью. Запуск EXE и его помощников проверен без телефона; отдельный аппаратный анлок именно этой сборкой пока не выполнен.
+
+Бэкапы и журналы создаются рядом с EXE независимо от текущей папки PowerShell. Сохраняйте эту папку до завершения процедуры и восстановления.
+
+<details>
+<summary>Запуск из исходников и сборка EXE</summary>
+
 1. Установите [Python 3.13 x64](https://www.python.org/downloads/windows/) и [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows). Откройте PowerShell 7 в папке исходников.
 2. Скачайте [Android Platform-Tools для Windows](https://developer.android.com/tools/releases/platform-tools). Распакуйте в `host-tools/platform-tools`, чтобы внутри находились `adb.exe` и `fastboot.exe`.
 3. Создайте Python-окружение и установите зависимости:
@@ -47,6 +58,17 @@ python -m venv .\host-tools\python
 ```
 
 Проверенная конфигурация: Python 3.13 x64, PowerShell 7, Platform-Tools 37.0.1, PyUSB 1.3.1, libusb-package 1.0.30.0. Wrapper использует локальные инструменты, включает UTF-8 и временно настраивает PATH. Менять системный PATH не нужно. Зависимости и Platform-Tools не входят в репозиторий.
+
+Запуск из исходников: `& .\tools\host-python.ps1 tools/unlock.py`. Для сборки установите закреплённые build-зависимости и выполните:
+
+```powershell
+& .\host-tools\python\Scripts\python.exe -m pip install --require-hashes -r .\build-support\requirements.txt
+& .\host-tools\python\Scripts\python.exe build-support/build_windows.py
+```
+
+Сборщик скачивает закреплённые входные архивы с проверкой SHA-256, запускает проверки EXE без телефона и создаёт ZIP с контрольной суммой в `dist/`. В GitHub Actions сборка выполняется при push/PR; ручной запуск с `publish_release=true` публикует preview-релиз после проверок Windows и Linux. Готовые бинарники в Git не хранятся.
+
+</details>
 
 ### Телефон
 
@@ -72,7 +94,7 @@ python -m venv .\host-tools\python
 ### Разблокировка
 
 ```powershell
-& .\tools\host-python.ps1 tools/unlock.py
+.\unmuda.exe
 ```
 
 Введите `yes` и следуйте сообщениям. Ручные команды ADB/fastboot и ввод serial не нужны. Утилита проверит телефон и fastboot до записи метки, создаст бэкапы и начнёт разблокировку.
@@ -86,15 +108,10 @@ python -m venv .\host-tools\python
 Если автоматический откат не завершился, восстановите USB-соединение и выполните:
 
 ```powershell
-& .\tools\host-python.ps1 tools/unlock.py --recover
+.\unmuda.exe --recover
 ```
 
-Не удаляйте бэкапы и журналы. Если wrapper недоступен из-за повреждённых USB-зависимостей, fastboot-восстановление можно запустить без PyUSB:
-
-```powershell
-$env:PATH = "$PWD\host-tools\platform-tools;$env:PATH"
-python tools/unlock.py --recover
-```
+Не удаляйте бэкапы и журналы. Fastboot-восстановление не требует работоспособной PyUSB/libusb. Если файлы самой portable-сборки повреждены, восстановите их из того же релизного архива, сохранив бэкапы и журналы рядом с EXE.
 
 <details>
 <summary>Дополнительная диагностика и тесты для Windows</summary>
@@ -102,7 +119,7 @@ python tools/unlock.py --recover
 Проверка зависимостей без обращения к телефону:
 
 ```powershell
-& .\tools\host-python.ps1 tools/unlock.py --preflight
+.\unmuda.exe --preflight
 ```
 
 `--preflight` не проверяет установленные драйверы; соединение проверяется при обычном запуске.
@@ -112,7 +129,7 @@ python tools/unlock.py --recover
 Если сервис не запускается из-за пустого `sysprop`, upstream описывает альтернативу без записи этого раздела:
 
 ```powershell
-& .\tools\host-python.ps1 tools/cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
+.\unmuda.exe --internal-tool cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
 ```
 
 Этот отдельный режим не выбирается автоматически и аппаратно этим форком не проверен.
@@ -267,6 +284,6 @@ DIAG shell ограничена SELinux и не является универс�
 
 Upstream также благодарит Meta Red Team X, Google Android Security Team, JD Labs, agg23 и rabits за обнаружение, исправление, анализ и PoC CVE-2024-31317.
 
-Набор содержит 102 автоматических теста: ADB/fastboot/USB подменяются, две проверки запускают безвредные локальные Python-процессы. Тесты не обращаются к телефону. Бэкапы, payload, журналы, venv и скачанные бинарники исключены из Git. Перед публикацией журнала удалите serial и личные данные; оригиналы разделов не прикладывайте в публичный issue.
+Набор содержит 107 автоматических тестов: ADB/fastboot/USB подменяются, две проверки запускают безвредные локальные Python-процессы. Сборка дополнительно проверяет готовый EXE с изолированным PATH и путями с кириллицей. Проверки не обращаются к телефону. Бэкапы, payload, журналы, venv и бинарники исключены из Git. Перед публикацией журнала удалите serial и личные данные; оригиналы разделов не прикладывайте в публичный issue.
 
 Лицензия — [GNU GPL v3](LICENSE), сохранена из исходного проекта. Утилита предоставляется без гарантий; полные условия находятся в LICENSE.

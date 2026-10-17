@@ -6,7 +6,7 @@ A bootloader unlock utility for the BALMUDA Phone. The [glebn2/unmuda](https://g
 
 > **Unlocking erases user data.** Save required files separately. A `chkcode` backup restores a service partition; it does not contain your photographs or documents. The risk of device damage cannot be eliminated completely.
 
-This is a CLI application. It currently runs from source; a packaged EXE is not available yet. Fork changes were written with assistance from **GPT-6.1 Sol**.
+This is a CLI application. A portable Windows build is available through [GitHub Releases](https://github.com/glebn2/unmuda/releases): extract the ZIP and run `unmuda.exe` from PowerShell. Python and dependencies are included. Fork changes were written with assistance from **GPT-6.1 Sol**.
 
 - [Compatibility](#compatibility)
 - [Windows](#windows)
@@ -37,6 +37,17 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 
 ### Installation
 
+1. Download `unmuda-v0.1.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/unmuda/releases).
+2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `unmuda.exe`.
+3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
+
+To check the archive hash, run `Get-FileHash .\unmuda-v0.1.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. This preview build is not digitally signed. The EXE and its helpers have been checked without a phone; this packaged build has not completed a separate hardware unlock.
+
+Backups and receipts are stored beside the EXE regardless of PowerShell's current directory. Retain this directory until the procedure and any recovery have finished.
+
+<details>
+<summary>Running from source and building the EXE</summary>
+
 1. Install [Python 3.13 x64](https://www.python.org/downloads/windows/) and [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows). Open PowerShell 7 in the source directory.
 2. Download [Android Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools). Extract them into `host-tools/platform-tools`, containing `adb.exe` and `fastboot.exe`.
 3. Create the Python environment and install dependencies:
@@ -47,6 +58,17 @@ python -m venv .\host-tools\python
 ```
 
 Tested configuration: Python 3.13 x64, PowerShell 7, Platform-Tools 37.0.1, PyUSB 1.3.1, libusb-package 1.0.30.0. The wrapper uses local tools, enables UTF-8 and sets PATH for its invocation only. No system PATH changes are needed. Dependencies and Platform-Tools are not included in the repository.
+
+Source launch: `& .\tools\host-python.ps1 tools/unlock.py --lang en`. To build, install the pinned build dependencies and run:
+
+```powershell
+& .\host-tools\python\Scripts\python.exe -m pip install --require-hashes -r .\build-support\requirements.txt
+& .\host-tools\python\Scripts\python.exe build-support/build_windows.py
+```
+
+The builder downloads pinned inputs with SHA-256 verification, checks the EXE without a phone and creates a ZIP plus checksum in `dist/`. GitHub Actions builds on push/PR; a manual run with `publish_release=true` publishes a preview release after Windows and Linux checks pass. Built binaries are not stored in Git.
+
+</details>
 
 ### Phone
 
@@ -72,7 +94,7 @@ If fastboot remains unavailable after installation, bind the Zadig-generated `An
 ### Unlocking
 
 ```powershell
-& .\tools\host-python.ps1 tools/unlock.py --lang en
+.\unmuda.exe --lang en
 ```
 
 Enter `yes` and follow the messages. Manual ADB/fastboot commands and serial entry are unnecessary. The utility checks the phone and fastboot before writing the marker, creates backups and starts unlocking.
@@ -86,15 +108,10 @@ After confirmation, the utility waits for a verified `unlocked` state, restores 
 If automatic rollback did not finish, restore the USB connection and run:
 
 ```powershell
-& .\tools\host-python.ps1 tools/unlock.py --recover --lang en
+.\unmuda.exe --recover --lang en
 ```
 
-Keep backups and receipts. If the wrapper is unavailable because USB dependencies are damaged, fastboot recovery can run without PyUSB:
-
-```powershell
-$env:PATH = "$PWD\host-tools\platform-tools;$env:PATH"
-python tools/unlock.py --recover --lang en
-```
+Keep backups and receipts. Fastboot recovery does not require working PyUSB/libusb. If portable application files are damaged, restore them from the same release archive while preserving backups and receipts beside the EXE.
 
 <details>
 <summary>Additional Windows diagnostics and tests</summary>
@@ -102,7 +119,7 @@ python tools/unlock.py --recover --lang en
 Check dependencies without accessing the phone:
 
 ```powershell
-& .\tools\host-python.ps1 tools/unlock.py --preflight --lang en
+.\unmuda.exe --preflight --lang en
 ```
 
 `--preflight` does not check installed drivers; the normal launch checks the connection.
@@ -112,7 +129,7 @@ For low-level operations, set `$env:ANDROID_SERIAL` to the original phone's seri
 If the service does not start because `sysprop` is empty, upstream describes an alternative that does not write that partition:
 
 ```powershell
-& .\tools\host-python.ps1 tools/cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
+.\unmuda.exe --internal-tool cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
 ```
 
 This separate mode is not selected automatically and has not been hardware-tested by this fork.
@@ -267,6 +284,6 @@ Original project contributors:
 
 Upstream also credits Meta Red Team X, Google Android Security Team, JD Labs, agg23 and rabits for the discovery, fix, analysis and PoC of CVE-2024-31317.
 
-The suite contains 102 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. Tests do not access the phone. Backups, payloads, receipts, virtual environments and downloaded binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
+The suite contains 107 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH and Unicode paths. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
 
 The [GNU GPL v3](LICENSE) license is retained from upstream. The utility is provided without warranties; see LICENSE for the complete terms.
