@@ -1,124 +1,272 @@
-# unmuda - Bootloader unlock utility for the Balmuda Phone
+# unmuda
 
-Lets you open the bootloader for flashing third-party software on the Balmuda Phone.
+[Русский](README.md) · **English**
 
-The method is based on Kyocera's service DIAG backdoor (subsys 0xFC), which is
-available in the USB composition `diag,modem,adb`, and on the service check
-`KcFastbootCheck()` in the bootloader (the `LOOTBFCK` magic in the chkcode
-partition).
+A bootloader unlock utility for the BALMUDA Phone. The [glebn2/unmuda](https://github.com/glebn2/unmuda) fork is based on [E2r7hN07Fl47/unmuda](https://github.com/E2r7hN07Fl47/unmuda), adding validation, backups, recovery and native Windows support without WSL.
 
----
-# **AI Disclosure - the entire script (and part of the instructions) was written with the use of AI. Do not use this tool if that does not suit you.**
----
+> **Unlocking erases user data.** Save required files separately. A `chkcode` backup restores a service partition; it does not contain your photographs or documents. The risk of device damage cannot be eliminated completely.
 
-> [!WARNING]
-> Neither the author, nor anyone involved in the creation, development, testing and/or popularization of this software, is liable for malfunctions, errors, data loss, lost profit and other possible damages arising from the use of this utility. You perform all actions at your own risk.
+This is a CLI application. It currently runs from source; a packaged EXE is not available yet. Fork changes were written with assistance from **GPT-6.1 Sol**.
 
-> [!IMPORTANT]
-> Unlocking the bootloader triggers erasure of all data and a reset to factory settings, and may also result in the warranty being voided. Take care of backups before starting the procedure.
+- [Compatibility](#compatibility)
+- [Windows](#windows)
+- [Linux](#linux)
+- [Backups and recovery](#recovery)
+- [Additional modes and diagnostics](#diagnostics)
+- [How the utility works](#limitations)
+- [Credits and license](#development)
 
-## Requirements
+<a id="compatibility"></a>
+## Compatibility
 
-1. Balmuda Phone A101BM on firmware version 1.220 - 1.280 (tested with -PO and -MI firmwares) with USB debugging enabled and the "Factory unlock" item activated
-2. A USB-C cable capable of data transfer
-3. A computer\laptop\tablet with Linux or Windows with WSL (Windows without WSL and macOS were not tested)
+| Parameter | Requirement |
+| --- | --- |
+| Model | A101BM or X01A |
+| System | Stock Android 12, SDK 31 |
+| Build | 1.220–1.280, including PO/MI suffixes such as `1.280PO.0686.a` |
+| Security patch level | Earlier than 2024-06-01 |
+| Connection | One phone and a working data-capable USB cable |
 
-## Preparation
+The utility checks these parameters automatically. They limit admission to the procedure but do not guarantee compatibility: a manufacturer may have backported the fix. CVE-2024-31317 was fixed in the [June 2024 Android Security Bulletin](https://source.android.com/docs/security/bulletin/2024-06-01).
 
-### On the phone
+Successful unlocking, restoration of the original `chkcode` and Android boot have been confirmed on A101BM, `1.280PO.0686.a`, SPL `2023-09-01`, Windows x64. The original project reports support for X01A and other builds. The new preliminary fastboot check has automated test coverage but has not been separately tested on a phone. This fork has not hardware-tested the modified Linux workflow or failure rollback scenarios.
 
-1. On the phone, open "Settings"
-2. Go to the "About phone" section
-3. Tap the "Build number" item 7 times
-4. Confirm your intent by entering your password (if required)
-5. Go back, open the "System" section
-6. Open "For developers"
-7. Enable "Factory unlock" and "USB debugging"
+<a id="setup"></a>
+<a id="windows"></a>
+## Windows
 
-### On the computer
+### Installation
 
-A number of dependencies need to be installed:
+1. Install [Python 3.13 x64](https://www.python.org/downloads/windows/) and [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows). Open PowerShell 7 in the source directory.
+2. Download [Android Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools). Extract them into `host-tools/platform-tools`, containing `adb.exe` and `fastboot.exe`.
+3. Create the Python environment and install dependencies:
 
-### Debian/Ubuntu
-
-```shell
-sudo apt install python3 python3-pyusb libusb-1.0-0 android-tools-adb android-tools-fastboot usbutils picocom
+```powershell
+python -m venv .\host-tools\python
+& .\host-tools\python\Scripts\python.exe -m pip install --require-hashes -r .\requirements-windows.txt
 ```
 
-### Fedora
+Tested configuration: Python 3.13 x64, PowerShell 7, Platform-Tools 37.0.1, PyUSB 1.3.1, libusb-package 1.0.30.0. The wrapper uses local tools, enables UTF-8 and sets PATH for its invocation only. No system PATH changes are needed. Dependencies and Platform-Tools are not included in the repository.
 
-```shell
-sudo dnf install python3 python3-pyusb libusb1 android-tools usbutils picocom
+### Phone
+
+Enable developer options by tapping the build number in About phone. Enable **USB debugging** and **OEM unlocking**. Connect the phone, select file transfer, unlock the screen and authorize debugging from this computer. If the prompt appears while starting the utility, accept it; if the utility stops because authorization is missing, run it again.
+
+<a id="drivers"></a>
+### Drivers
+
+Install drivers using [Zadig](https://zadig.akeo.ie/) when each mode appears. The utility switches modes and checks the connection automatically.
+
+| Purpose | Device in Zadig | Driver |
+| --- | --- | --- |
+| Fastboot | `18D1:D00D` | WinUSB with the `tools/balmuda-fastboot.cfg` preset |
+| DIAG | `0482:0A9D`, **Interface 0** | WinUSB |
+
+**Fastboot:** during the initial check, use Zadig **Device → Load Preset Device → `tools/balmuda-fastboot.cfg`**, select WinUSB and install the driver. The utility waits up to five minutes for the connection, then returns the phone to Android. The preset specifies the Android interface GUID required by fastboot.
+
+If fastboot remains unavailable after installation, bind the Zadig-generated `Android_Bootloader_Interface.inf` to `18D1:D00D` in Device Manager: Update driver → Browse my computer → Let me pick → Have Disk. See the [Zadig guide](https://github.com/pbatard/libwdi/wiki/Zadig#example-of-a-zadig-preset-device-config-file) and [USB driver installation](https://developer.android.com/studio/run/oem-usb). If the wait expires before the marker is written, return the phone to Android using its power button and rerun after configuring the driver.
+
+**DIAG:** once `0482:0A9D` appears, enable **Options → List All Devices**, select **Interface 0** and install WinUSB. If the utility stopped because this driver was missing before backups were created, install it and repeat the normal launch. If it reports an existing session, use [recovery](#recovery).
+
+<a id="usage"></a>
+### Unlocking
+
+```powershell
+& .\tools\host-python.ps1 tools/unlock.py --lang en
 ```
 
-### Arch Linux
+Enter `yes` and follow the messages. Manual ADB/fastboot commands and serial entry are unnecessary. The utility checks the phone and fastboot before writing the marker, creates backups and starts unlocking.
 
-```shell
-sudo pacman -S python python-pyusb libusb android-tools usbutils picocom
+On the phone, select **Unlock the bootloader** with the volume buttons and confirm as instructed on screen. On the tested A101BM, the power button confirms the choice. Stay nearby: unlocking cannot finish without this action.
+
+After confirmation, the utility waits for a verified `unlocked` state, restores the original `chkcode` and reboots. Wait for the Android welcome screen. USB debugging may need to be enabled again after the reset.
+
+### Continuing recovery
+
+If automatic rollback did not finish, restore the USB connection and run:
+
+```powershell
+& .\tools\host-python.ps1 tools/unlock.py --recover --lang en
 ```
 
-### Nix OS
+Keep backups and receipts. If the wrapper is unavailable because USB dependencies are damaged, fastboot recovery can run without PyUSB:
 
-```shell
-cd tools
-nix-shell
+```powershell
+$env:PATH = "$PWD\host-tools\platform-tools;$env:PATH"
+python tools/unlock.py --recover --lang en
 ```
 
-## Usage
+<details>
+<summary>Additional Windows diagnostics and tests</summary>
 
-### On Linux
+Check dependencies without accessing the phone:
 
-```shell
-bash unlock.sh
+```powershell
+& .\tools\host-python.ps1 tools/unlock.py --preflight --lang en
 ```
 
-The script will offer to perform the unlocking procedure; answer `yes`.
+`--preflight` does not check installed drivers; the normal launch checks the connection.
 
-If necessary, unlock the phone and press "Allow" in the window that appears
-asking for permission to connect the computer via ADB, then wait for the phone
-to reboot.
+For low-level operations, set `$env:ANDROID_SERIAL` to the original phone's serial. The main controller does this automatically. Before directly running a DIAG helper, stop the ADB server and restart it afterward, including after a failure; the controller coordinates this automatically. See the [libusb restrictions](https://github.com/libusb/libusb/wiki/Windows#known-restrictions).
 
-After the phone reboots into fastboot, use the volume buttons to select
-`Unlock the bootloader`.
+If the service does not start because `sysprop` is empty, upstream describes an alternative that does not write that partition:
 
-The phone will reboot into fastboot again, after which it will restart into the
-system with a full wipe of all data (you did take care of a backup of your
-important data, right?).
+```powershell
+& .\tools\host-python.ps1 tools/cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
+```
 
+This separate mode is not selected automatically and has not been hardware-tested by this fork.
 
-## Limitations
+Tests without a phone:
 
-You must never flash via fastboot on this phone - it will almost certainly turn
-the phone into a brick, and getting it out of that state will be very difficult.
+```powershell
+& .\tools\host-python.ps1 -m unittest discover -s tests -v
+```
 
-## Authors
+</details>
 
-The following took part in the development and testing of the utility:
+<a id="linux"></a>
+## Linux
 
-1. E2r7hN07Fl47: [GitHub](https://github.com/E2r7hN07Fl47)
-2. Mamkin_Xakep: [e-mail](mailto:mamkin@xakep.xyz), [Telegram](https://t.me/Mamkin_Xakep_bot)
-3. radio_mudrec: [4pda](https://4pda.to/forum/index.php?showuser=9245164) - bugfixes in unlock.sh
-4. Stoobyy: [GitHub](https://github.com/Stoobyy) - English translation, bugfixes
+### Installation
 
-## LLMs used
+Python 3.9+, PyUSB, libusb-1.0, ADB and fastboot are required. Example for Debian/Ubuntu:
 
-The main model used for development was GLM 5.3 by [Z.ai](https://chat.z.ai) (ex-Zhipu AI).
+```bash
+sudo apt install python3 python3-venv python3-pip libusb-1.0-0 adb fastboot
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r tools/requirements.txt
+```
 
-An auxiliary tool was a private Telegram bot by Lach: [GitHub](https://github.com/CertainLach)
+Configure your system's USB permissions/udev rules for DIAG VID `0482` and fastboot `18D1:D00D`. If `qcserial` holds DIAG, check its binding to the relevant interface. `shell.nix` is retained for Nix; this configuration has not been independently validated.
 
-An unknown model Claude by Anthropic, was used for translation and external analysis. (Used by Stoobyy)
+### Phone and launch
 
-## Special thanks
+Enable developer options by tapping the build number in About phone, then enable **USB debugging** and **OEM unlocking**. Connect one phone, unlock its screen and authorize USB debugging.
 
-This project builds upon the discovery, patching, and subsequent research of **CVE-2024-31317** (Android Zygote Command Injection). Special thanks to the security researchers and teams who made this work possible:
+In the activated environment, run:
 
-### Vulnerability Discovery
-* **Meta Red Team X** - Discovered the original vulnerability in the Android Framework and responsibly disclosed it to Google.
+```bash
+python tools/unlock.py --lang en
+```
 
-###  Patching & Security Coordination
-* **Google Android Security Team** - Validated the vulnerability and released the official fix in the June 2024 Android Security Bulletin.
+Enter `yes`. The utility checks the phone and fastboot automatically, returns to Android, enables DIAG, saves backups and starts unlocking. On the screen, select **Unlock the bootloader** with the volume buttons and confirm as instructed; on the tested A101BM, use the power button. After `chkcode` restoration and reboot, wait for the Android welcome screen.
 
-### Technical Analysis & PoC Development
-* **JD Labs (京东獬豸信息安全实验室)** - Conducted an in-depth technical analysis and architectural comparison with historical attacks.
-* **agg23** - Created comprehensive documentation and detailed breakdowns of the injection architecture.
-* **rabits** - Developed and published the functional Proof-of-Concept (PoC) exploit showcasing privilege escalation via ADB.
+### Continuing recovery
+
+```bash
+python tools/unlock.py --recover --lang en
+```
+
+Retain original backups and receipts. This mode does not require PyUSB for fastboot recovery.
+
+<details>
+<summary>Additional Linux diagnostics and tests</summary>
+
+Check dependencies without a phone:
+
+```bash
+python tools/unlock.py --preflight --lang en
+```
+
+The Bash entry points `bash unlock.sh` and `bash unlock.en.sh` are retained; they use the same controller.
+
+For direct low-level calls, set `ANDROID_SERIAL` to the original phone. If DIAG must be re-enabled, use `tools/cve31317.py`, then `tools/kdiag_shell.py "setprop vendor.kc.diag.status start"`. The main workflow enables DIAG and checks the service automatically.
+
+Upstream's alternative for an empty `sysprop`, without writing the partition:
+
+```bash
+python tools/cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
+```
+
+This mode is not selected automatically and has not been hardware-tested by this fork.
+
+Tests without a phone:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+</details>
+
+<a id="recovery"></a>
+## Backups and recovery
+
+The utility reads the entire `chkcode` twice, requires identical data of exactly **524288 bytes**, rejects an original containing the service marker and saves:
+
+| Files | Purpose |
+| --- | --- |
+| `chkcode_backup.bin` + `chkcode_backup.sha256` | Original partition and SHA-256 |
+| `chkcode_backup.recovery.bin` + `chkcode_backup.recovery.sha256` | Second verified copy |
+| `chkcode_backup.device.json` | Original device, hash and operation phase |
+
+Existing copies are never overwritten. Retain the complete set; two copies on one drive do not protect against losing that drive. An all-zero stock `chkcode` is acceptable, but recovery uses the actual original dump rather than a newly generated zero-filled image.
+
+A failure after a possible marker write triggers bounded automatic rollback, waiting up to 120 seconds for the same phone. Accessible Android/DIAG allows restoration of the original eight bytes with full-partition verification; fastboot restores the verified original image. A locked bootloader requires a verified service marker in the receipt. This failure branch is based on upstream research and has not been hardware-tested by this fork.
+
+Unknown lock state does not permit flashing. Failed flashes are not retried indefinitely or followed by an automatic reboot. If flashing completed but the reboot reply was lost, only reboot completion is retried.
+
+Incomplete rollback retains `recovery_pending`; use the `--recover` command in your OS section. It does not start another unlock or restore erased user data. If `cve_cleanup.device.json` remains, recovery first restores the original phone's temporary hidden API/USAP settings and removes the payload; this can also run before a partition backup exists.
+
+If one copy is damaged, the second is accepted only against the original receipt hash. A truncated dump, lost receipt or hash mismatch requires investigation; recreating a SHA file does not repair a backup. Do not delete session artifacts to enable a rerun.
+
+Ctrl+C and handled signals are deferred until the write and receipt update finish. Forced process termination, power loss and physical USB disconnection cannot be repaired by the signal handler. Do not disconnect the cable during a write.
+
+<a id="diagnostics"></a>
+## Additional modes and diagnostics
+
+The normal launch runs the complete procedure. Additional modes serve specific tasks:
+
+| Mode | Action |
+| --- | --- |
+| `--preflight` | Host dependencies only, without ADB/USB |
+| `--prepare` | DIAG and backups; no fastboot check, reboot, marker or unlock |
+| `--unlock-prepared` | Unlock from a saved `prepared` state without recreating backups |
+| `--recover` | Continue recovery of the original session |
+| `--lang ru` / `--lang en` | Controller language; some low-level messages remain Russian |
+
+The split `--prepare` / `--unlock-prepared` modes are unnecessary for a normal launch. They assume fastboot is already configured; rebooting a prepared phone may require separately re-enabling DIAG/the service.
+
+| Message | Action |
+| --- | --- |
+| ADB offline / unauthorized | Unlock the screen, accept debugging authorization, check the cable and driver |
+| Fastboot missing during the initial check | Configure the driver/USB permissions; the marker has not been written |
+| DIAG `no langid` / Access denied | Check DIAG WinUSB and exclude concurrent ADB polling |
+| `fs_sys_call_diag` not `running` / DIAG_BAD_CMD | Check service startup; an empty `sysprop` has a separate alternative command in each OS section |
+| Backup or receipt already exists | Use the saved session or recovery; do not delete originals |
+| Readback after a write not confirmed | The write result is uncertain; allow controller rollback |
+| Repeated fastboot entry after unlocking started | A marker may remain; use the original receipt and `--recover` |
+
+Low-level tools reside in `tools/`: `chkcode_backup.py` validates an image without USB; `backup_chkcode.py` creates backups; `unlock_chkcode.py` writes the marker; `restore_chkcode.py` performs limited DIAG rollback; `cve31317.py` / `cve_cleanup.py` manage preparation and cleanup; `diag_transport.py`, `fs_sys_call.py`, `kdiag_shell.py` implement transport and protocols.
+
+Direct use bypasses some controller protections. The inherited `exfil.py` and `at_console.py` are outside the main workflow: the former has temporary-file cleanup limitations after failures; the latter lacks serial/multiple-device validation and accepts arbitrary AT commands. `fs_sys_call.py --close-slots` blindly closes the daemon's five fd slots and is never called automatically.
+
+<a id="limitations"></a>
+## How the utility works
+
+The original method uses CVE-2024-31317 to execute a preparation command as uid=1000, switches USB to DIAG and exposes `chkcode` through `fs_sys_call_diag`. The `LOOTBFCK` marker enables the ABL service path `KcFastbootCheck()` and forces fastboot entry. After verified unlocking, the utility restores the original partition.
+
+This fork adds serial binding across ADB/DIAG/fastboot, model/build checks, an early fastboot check, two backups, live-partition validation before writing, a state receipt, a process lock, cancellation handling and bounded automatic rollback. Temporary CVE settings are cleaned up with verification; unfinished cleanup retains a receipt.
+
+The DIAG shell is subject to SELinux and is not universal root. During this procedure, fastboot only flashes the original `chkcode`. GSI, boot/system/super or GPT flashing, relocking, slot changes and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
+
+Matching reads and SHA establish data consistency and local file integrity, not physical flash persistence. Successful fastboot flash is not independent readback; an accepted reboot does not prove completed Android boot. Automatic rollback is limited by available transport and confirmed state.
+
+<a id="development"></a>
+## Credits and license
+
+Original project and Kyocera research: [E2r7hN07Fl47/unmuda](https://github.com/E2r7hN07Fl47/unmuda). Fork maintainer: [glebn2](https://github.com/glebn2). Fork changes dated 2026-10-17 cover validation and backups, recovery, Windows compatibility and consolidated documentation. These code changes were written with assistance from **GPT-6.1 Sol**.
+
+Original project contributors:
+
+- [E2r7hN07Fl47](https://github.com/E2r7hN07Fl47).
+- Mamkin_Xakep — [email](mailto:mamkin@xakep.xyz), [Telegram](https://t.me/Mamkin_Xakep_bot).
+- [radio_mudrec](https://4pda.to/forum/index.php?showuser=9245164) — Bash workflow fixes.
+- [Stoobyy](https://github.com/Stoobyy) — English translation and fixes.
+
+Upstream also credits Meta Red Team X, Google Android Security Team, JD Labs, agg23 and rabits for the discovery, fix, analysis and PoC of CVE-2024-31317.
+
+The suite contains 102 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. Tests do not access the phone. Backups, payloads, receipts, virtual environments and downloaded binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
+
+The [GNU GPL v3](LICENSE) license is retained from upstream. The utility is provided without warranties; see LICENSE for the complete terms.
