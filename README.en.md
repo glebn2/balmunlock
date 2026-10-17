@@ -29,7 +29,7 @@ This is a CLI application. A portable Windows build is available through [GitHub
 
 The utility checks these parameters automatically. They limit admission to the procedure but do not guarantee compatibility: a manufacturer may have backported the fix. CVE-2024-31317 was fixed in the [June 2024 Android Security Bulletin](https://source.android.com/docs/security/bulletin/2024-06-01).
 
-Successful unlocking, restoration of the original `chkcode` and Android boot have been confirmed on A101BM, `1.280PO.0686.a`, SPL `2023-09-01`, Windows x64. The original project reports support for X01A and other builds. The new preliminary fastboot check has automated test coverage but has not been separately tested on a phone. This fork has not hardware-tested the modified Linux workflow or failure rollback scenarios.
+Successful unlocking, restoration of the original `chkcode` and Android boot have been confirmed on A101BM, `1.280PO.0686.a`, SPL `2023-09-01`, Windows x64. On the same phone, the EXE was verified to refuse an already unlocked bootloader before writing the marker. A complete unlock using the packaged build, the modified Linux workflow and hardware failure rollback remain unverified by this fork. The original project reports support for X01A and other builds.
 
 <a id="setup"></a>
 <a id="windows"></a>
@@ -41,7 +41,7 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `unmuda.exe`.
 3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
 
-To check the archive hash, run `Get-FileHash .\unmuda-v0.1.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. This preview build is not digitally signed. The EXE and its helpers have been checked without a phone; this packaged build has not completed a separate hardware unlock.
+To check the archive hash, run `Get-FileHash .\unmuda-v0.1.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
 
 Backups and receipts are stored beside the EXE regardless of PowerShell's current directory. Retain this directory until the procedure and any recovery have finished.
 
@@ -66,7 +66,7 @@ Source launch: `& .\tools\host-python.ps1 tools/unlock.py --lang en`. To build, 
 & .\host-tools\python\Scripts\python.exe build-support/build_windows.py
 ```
 
-The builder downloads pinned inputs with SHA-256 verification, checks the EXE without a phone and creates a ZIP plus checksum in `dist/`. GitHub Actions builds on push/PR; a manual run with `publish_release=true` publishes a preview release after Windows and Linux checks pass. Built binaries are not stored in Git.
+The builder downloads pinned inputs with SHA-256 verification, checks the EXE without a phone and creates a ZIP plus checksum in `dist/`. GitHub Actions builds on push/PR; a manual run with `publish_release=true` publishes a release after Windows and Linux checks pass. Built binaries are not stored in Git.
 
 </details>
 
@@ -92,6 +92,8 @@ If fastboot remains unavailable after installation, bind the Zadig-generated `An
 
 <a id="usage"></a>
 ### Unlocking
+
+Open PowerShell in the directory extracted from the ZIP, then run:
 
 ```powershell
 .\unmuda.exe --lang en

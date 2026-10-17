@@ -1,9 +1,9 @@
-Portable console build for Windows x64. Extract the complete ZIP into a writable folder and run .\unmuda.exe from PowerShell. Keep _internal, platform-tools and tools beside the executable.
+Portable console build for Windows x64. Extract the complete ZIP into a writable folder, open PowerShell in that extracted directory and run .\unmuda.exe. Keep _internal, platform-tools and tools beside the executable.
 
 Python, PyUSB/libusb and Android Platform-Tools are included. No separate Python installation or PowerShell wrapper is required. WinUSB driver installation through Zadig and physical unlock confirmation on the phone are still required. See the included Russian/English README.
 
 Unlocking erases user data. Backups and recovery receipts are retained beside unmuda.exe. Never delete them to enable a rerun. An unlocked phone is refused before a marker write; an existing backup/session is refused before device access.
 
-This is a preview. The source workflow has completed an unlock on A101BM 1.280PO.0686.a under Windows. The new automatic preliminary fastboot check and packaged EXE have automated/offline coverage, but have not completed a separate hardware unlock. Hardware failure rollback and the modified Linux workflow remain unverified. The executable is not digitally signed.
+The source workflow has completed an unlock on A101BM 1.280PO.0686.a under Windows. The packaged EXE has automated/offline coverage, and its refusal of an already unlocked bootloader before marker writes was verified on the same phone. A complete unlock using the packaged build, hardware failure rollback and the modified Linux workflow remain unverified. The executable is not digitally signed.
 
 The build recipe, pinned inputs, SHA-256 and corresponding unmuda source are available with this release. Third-party notices and corresponding libusb sources are included in the ZIP. Fork changes were written with assistance from GPT-6.1 Sol. Original method and Kyocera research: E2r7hN07Fl47/unmuda; fork: glebn2/unmuda. GPL v3 is retained.
