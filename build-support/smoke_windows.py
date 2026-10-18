@@ -29,7 +29,7 @@ def main():
         env = os.environ.copy()
         windows = os.environ["SystemRoot"]
         env["PATH"] = os.pathsep.join([str(Path(windows) / "System32"), windows])
-        exe = app / "unmuda.exe"
+        exe = app / "balmunlock.exe"
 
         def run(*command, expected=0, input=None):
             result = subprocess.run([str(x) for x in command], cwd=caller, env=env,
@@ -40,8 +40,9 @@ def main():
             return result.stdout + result.stderr
 
         from runtime_paths import VERSION
-        assert f"unmuda {VERSION}" in run(exe, "--version")
+        assert f"balmunlock {VERSION}" in run(exe, "--version")
         assert "--recover" in run(exe, "--help")
+        assert "--verbose" in run(exe, "--help", "--lang", "en")
         preflight = run(exe, "--preflight", "--lang", "en")
         assert "libusb: available" in preflight and str(app / "platform-tools") in preflight, preflight
         for helper in ("cve31317.py", "kdiag_shell.py", "backup_chkcode.py", "unlock_chkcode.py",
@@ -81,7 +82,10 @@ def main():
                  "sha256": digest, "ro.product.model": "A101BM", "ro.build.version.sdk": "31",
                  "ro.build.version.incremental": "1.280PO.0686.a", "ro.build.version.security_patch": "2023-09-01"}
         receipt.write_text(json.dumps(state), encoding="utf-8")
-        assert "already finished" in run(exe, "--guided", "--session", "legacy", "--lang", "en", input="")
+        completed = run(exe, "--guided", "--session", "legacy", "--lang", "en", input="")
+        assert "already finished" in completed
+        assert completed.count("balmunlock " + VERSION) == 1
+        assert completed.count("Backups and logs:") == 1
         state.update(phase="prepared", marker_verified=False)
         receipt.write_text(json.dumps(state), encoding="utf-8")
         assert "saved preparation" in run(exe, "--guided", "--session", "legacy", "--lang", "en", input="no\n")

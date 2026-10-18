@@ -80,7 +80,7 @@ class FakeADB:
 
 class CleanupTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=TOOLS.parent)
+        self.tmp = tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=TOOLS.parent)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.state = self.root / cleanup.STATE_NAME

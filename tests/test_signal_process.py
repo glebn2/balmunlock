@@ -14,7 +14,7 @@ from operation_signals import CancelRequested, OperationSignals
 
 class SignalProcessTests(unittest.TestCase):
     def test_parent_sigint_does_not_kill_writer_before_journal(self):
-        with tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=ROOT) as folder:
+        with tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=ROOT) as folder:
             folder = Path(folder)
             writer = folder / "writer.py"
             result_file = folder / "result.txt"

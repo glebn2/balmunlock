@@ -15,7 +15,7 @@ from session_store import SessionStore, directory_key
 
 class SessionStoreTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=Path(__file__).resolve().parents[1])
+        self.tmp = tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=Path(__file__).resolve().parents[1])
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.store = SessionStore(self.root)

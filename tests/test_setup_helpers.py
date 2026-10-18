@@ -43,7 +43,7 @@ class ProbeTests(unittest.TestCase):
 class LiveOriginalTests(unittest.TestCase):
     def test_two_identical_full_reads_are_required_and_no_write_method_is_called(self):
         original = bytes(backup.CHKCODE_SIZE)
-        with tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=Path(__file__).resolve().parents[1]) as temporary:
+        with tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=Path(__file__).resolve().parents[1]) as temporary:
             image = Path(temporary) / "original.bin"
             backup.save_backup(image, original)
             transport, fs = Mock(), Mock()
@@ -59,7 +59,7 @@ class LiveOriginalTests(unittest.TestCase):
 
     def test_short_or_changed_second_read_refuses_and_closes_transport(self):
         original = bytes(backup.CHKCODE_SIZE)
-        with tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=Path(__file__).resolve().parents[1]) as temporary:
+        with tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=Path(__file__).resolve().parents[1]) as temporary:
             image = Path(temporary) / "original.bin"
             backup.save_backup(image, original)
             transport, fs = Mock(), Mock()
@@ -72,7 +72,7 @@ class LiveOriginalTests(unittest.TestCase):
             transport.close.assert_called_once()
 
     def test_bad_local_backup_refuses_before_usb_import_or_transport(self):
-        with tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=Path(__file__).resolve().parents[1]) as temporary:
+        with tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=Path(__file__).resolve().parents[1]) as temporary:
             image = Path(temporary) / "bad.bin"
             image.write_bytes(b"truncated")
             opener = Mock()

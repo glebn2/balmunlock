@@ -1,19 +1,19 @@
-Unmuda 0.3.0 — separate sessions for multiple phones
+balmunlock 0.4.0 — new name and clearer console guidance
 
-Windows x64: extract the complete ZIP into a writable folder, open PowerShell there and run .\unmuda.exe. Python, USB libraries and Android Platform-Tools are included. Keep _internal, platform-tools and tools beside the EXE. Linux: use Source code and the Linux README section.
+Windows x64: extract the complete ZIP into a writable folder, open PowerShell there and run .\balmunlock.exe. Python, USB libraries and Android Platform-Tools are included. Keep _internal, platform-tools and tools beside the EXE. Linux: use Source code and the Linux README section.
 
 What changed:
-- One installation can unlock any number of supported Balmuda phones, one at a time. The attached serial selects a separate sessions/device-... directory; completed sessions for other phones do not block a new unlock.
-- Each directory retains its own original images, hashes, device receipt, temporary-setting cleanup state and error log. Serial bindings are checked before resuming recovery; originals are never shared between phones or overwritten.
-- A known phone resumes its own preparation/recovery, or reports its completed unlock. Serial discovery only lists ADB/fastboot transports and does not reboot or activate DIAG.
-- Existing 0.1/0.2 files beside the EXE are recognized in place, without moving or deleting them. --list-sessions lists saved sessions without device access; --session SERIAL_OR_KEY selects a particular saved session, including legacy.
-- No connected phone or ambiguous saved sessions produce a selection prompt. Multiple connected phones require disconnecting all but one.
-- Guided driver/authorization retries and bounded recovery from 0.2 remain available.
+- This fork is now named balmunlock. The EXE, archives, repository links and help use the new name. The original unmuda method, authors and GPL v3 license remain credited.
+- Normal console output shows the current step and required action. Dependency dumps, JSON and helper output are retained in balmunlock.log; --verbose also shows technical output in the console. --preflight remains a detailed host-only check.
+- The version and backup directory are shown once. Session menus use readable stage descriptions; enter r to search for a newly connected phone without restarting.
+- Declining a setup retry stops the workflow without another retry question. Fastboot instructions match Windows/Linux, and the unlock prompt explains the volume/power-button confirmation.
+- Recovery distinguishes restoring the partition from finishing a pending reboot, without repeating a completed flash.
+- Existing per-device directories and v1 receipts remain compatible. Phones retain separate originals, checksums and recovery state; no backup migration or overwrite is performed automatically.
 
 Normal terminals enable guided prompts automatically. --guided explicitly enables them with redirected input; --non-interactive keeps strict stop-on-error behavior. An ordinary launch offers the appropriate recovery action; --recover remains available.
 
 Upgrading: extract the whole new archive and retain the old directory. Copy legacy chkcode_backup* files and cve_cleanup.device.json (if present) beside the new EXE. If you already have a sessions directory, copy it intact as well. Do not merge different phones' files into one session, overwrite/delete originals or regenerate checksums to bypass validation. Keep the complete sessions directory for recovery.
 
-Unlocking erases user data. The source workflow completed an unlock on A101BM 1.280PO.0686.a under Windows, and the earlier EXE's refusal of an already unlocked bootloader was verified on a phone. Normal USB (0482:0A74) and bootloader USB (18D1:D00D) were observed on X01A without unlocking it; X01A DIAG and a full unlock remain unverified by this fork. The new session flows have offline regression/frozen-EXE coverage; a complete 0.3.0 hardware unlock and hardware failure rollback remain unverified. The EXE is not digitally signed.
+Unlocking erases user data. The source workflow completed an unlock on A101BM 1.280PO.0686.a under Windows, and the earlier EXE's refusal of an already unlocked bootloader was verified on a phone. Normal USB (0482:0A74) and bootloader USB (18D1:D00D) were observed on X01A without unlocking it; X01A DIAG and a full unlock remain unverified by this fork. The updated flows have offline regression/frozen-EXE coverage; a complete 0.4.0 hardware unlock and hardware failure rollback remain unverified. The EXE is not digitally signed.
 
-The ZIP includes third-party notices and corresponding libusb sources. Original method and Kyocera research: E2r7hN07Fl47/unmuda. Fork: glebn2/unmuda, with GPT-6.1 Sol assistance. GPL v3 is retained.
+The ZIP includes third-party notices and corresponding libusb sources. Original method and Kyocera research: E2r7hN07Fl47/unmuda. Fork: glebn2/balmunlock, with GPT-6.1 Sol assistance. GPL v3 is retained.

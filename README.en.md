@@ -1,12 +1,14 @@
-# unmuda
+# balmunlock
 
 [Русский](README.md) · **English**
 
-A bootloader unlock utility for the BALMUDA Phone. The [glebn2/unmuda](https://github.com/glebn2/unmuda) fork is based on [E2r7hN07Fl47/unmuda](https://github.com/E2r7hN07Fl47/unmuda), adding validation, backups, recovery and native Windows support without WSL.
+A BALMUDA Phone bootloader unlock utility with guided setup, backups and recovery. Runs on Windows without WSL and on Linux. Based on the method and original code from [E2r7hN07Fl47/unmuda](https://github.com/E2r7hN07Fl47/unmuda).
+
+Versions 0.1–0.3 of this fork were released as unmuda. From 0.4.0 onward, the project is named **balmunlock**; saved sessions remain compatible.
 
 > **Unlocking erases user data.** Save required files separately. A `chkcode` backup restores a service partition; it does not contain your photographs or documents. The risk of device damage cannot be eliminated completely.
 
-This is a CLI application. A portable Windows build is available through [GitHub Releases](https://github.com/glebn2/unmuda/releases): extract the ZIP and run `unmuda.exe` from PowerShell. Python and dependencies are included. Fork changes were written with assistance from **GPT-6.1 Sol**.
+This is a CLI application. A portable Windows build is available through [GitHub Releases](https://github.com/glebn2/balmunlock/releases): extract the ZIP and run `balmunlock.exe` from PowerShell. Python and dependencies are included. Fork changes were written with assistance from **GPT-6.1 Sol**.
 
 - [Compatibility](#compatibility)
 - [Windows](#windows)
@@ -37,11 +39,11 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 
 ### Installation
 
-1. Download `unmuda-v0.3.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/unmuda/releases).
-2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `unmuda.exe`.
+1. Download `balmunlock-v0.4.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/balmunlock/releases).
+2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `balmunlock.exe`.
 3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
 
-To check the archive hash, run `Get-FileHash .\unmuda-v0.3.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
+To check the archive hash, run `Get-FileHash .\balmunlock-v0.4.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
 
 Each phone gets a separate `sessions/device-.../` directory beside the EXE, regardless of PowerShell's current directory. It contains only that phone's backups and receipts; the selected path is printed. Retain the entire `sessions/` directory for recovery. Legacy 0.1/0.2 files beside the EXE are recognized and kept in place.
 
@@ -98,7 +100,7 @@ If fastboot remains unavailable after installation, bind the Zadig-generated `An
 Open PowerShell in the directory extracted from the ZIP, then run:
 
 ```powershell
-.\unmuda.exe --lang en
+.\balmunlock.exe --lang en
 ```
 
 A normal terminal enables guided prompts. Enter `yes` when ready for the proposed action. If ADB is unauthorized, accept the phone prompt and enter `yes` to check again in the same window. Manual ADB/fastboot commands and serial entry are unnecessary. The utility checks the phone and fastboot before writing the marker, creates backups and starts unlocking.
@@ -112,7 +114,7 @@ After confirmation, the utility waits for a verified `unlocked` state, restores 
 A normal launch recognizes saved sessions and offers the appropriate continuation. If automatic rollback is unfinished, fix the connection/driver and confirm another recovery attempt in the same window. After closing the program, launch normally or explicitly select recovery:
 
 ```powershell
-.\unmuda.exe --recover --lang en
+.\balmunlock.exe --recover --lang en
 ```
 
 Keep backups and receipts. Fastboot recovery does not require working PyUSB/libusb. If portable application files are damaged, restore them from the same release archive while preserving the entire `sessions/` directory and any legacy backups/receipts beside the EXE.
@@ -123,7 +125,7 @@ Keep backups and receipts. Fastboot recovery does not require working PyUSB/libu
 Check dependencies without accessing the phone:
 
 ```powershell
-.\unmuda.exe --preflight --lang en
+.\balmunlock.exe --preflight --lang en
 ```
 
 `--preflight` does not check installed drivers; the normal launch checks the connection.
@@ -133,7 +135,7 @@ For low-level operations, set `$env:ANDROID_SERIAL` to the original phone's seri
 If the service does not start because `sysprop` is empty, upstream describes an alternative that does not write that partition:
 
 ```powershell
-.\unmuda.exe --internal-tool cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
+.\balmunlock.exe --internal-tool cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
 ```
 
 This separate mode is not selected automatically and has not been hardware-tested by this fork.
@@ -216,7 +218,7 @@ python -m unittest discover -s tests -v
 
 One installation supports any number of phones, one at a time. A normal launch lists ADB/fastboot devices and selects a session by serial. A new phone gets its own directory; a known phone resumes its own session. Another phone's completed or interrupted session does not block a new unlock, and its files are neither used nor changed.
 
-If no phone is detected, the program offers saved-session selection. For a new phone, connect it and relaunch. Leave only one phone connected. `--list-sessions` lists saved sessions without device access; `--session SERIAL_OR_KEY` selects an existing session without automatic discovery. `--session legacy` selects older files in the application directory. Selection itself never flashes or reboots the phone.
+If no phone is detected, the program offers saved-session selection. For a new phone, connect it and enter `r` to search again in the same window. Leave only one phone connected. `--list-sessions` lists saved sessions without device access; `--session SERIAL_OR_KEY` selects an existing session without automatic discovery. `--session legacy` selects older files in the application directory. Selection itself never flashes or reboots the phone.
 
 After selection, the program validates saved files and explains the session:
 
@@ -243,7 +245,8 @@ Backup creation reads all of `chkcode` twice and requires identical **524288 byt
 | `chkcode_backup.recovery.bin` + `chkcode_backup.recovery.sha256` | Second verified copy |
 | `chkcode_backup.device.json` | Original device, hash and operation phase |
 | `cve_cleanup.device.json`, if retained | Restore temporary Android settings and remove the payload on the original phone |
-| `unmuda-last-error.txt`, if created | Last error details for diagnosis |
+| `balmunlock-last-error.txt`, if created | Last error details for diagnosis |
+| `balmunlock.log`, if created | Detailed command/helper output; session selection may also create a log beside the EXE |
 
 Originals are never deleted or overwritten. If one copy is damaged, the other is accepted only against the original receipt hash. Regenerating SHA cannot make a truncated file valid. Two copies on one drive do not protect against losing that drive; retain the complete set separately. Redact serial numbers and personal data before publishing logs.
 
@@ -259,6 +262,7 @@ The normal launch runs the complete procedure. Additional modes serve specific t
 | Mode | Action |
 | --- | --- |
 | `--preflight` | Host dependencies only, without ADB/USB |
+| `--verbose` | Also show technical console output; it is saved to `balmunlock.log` even without this flag |
 | `--list-sessions` | List saved serials, phases and keys without ADB/USB |
 | `--session SERIAL_OR_KEY` | Select a saved session by serial or key; `legacy` selects older files in the application directory |
 | `--prepare` | DIAG and backups; no fastboot check, reboot, marker or unlock |
@@ -309,6 +313,6 @@ Original project contributors:
 
 Upstream also credits Meta Red Team X, Google Android Security Team, JD Labs, agg23 and rabits for the discovery, fix, analysis and PoC of CVE-2024-31317.
 
-The suite contains 175 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH, Unicode paths, two independent sessions and legacy receipts. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
+The suite contains 185 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH, Unicode paths, two independent sessions and legacy receipts. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
 
 The [GNU GPL v3](LICENSE) license is retained from upstream. The utility is provided without warranties; see LICENSE for the complete terms.

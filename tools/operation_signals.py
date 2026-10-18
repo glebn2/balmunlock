@@ -12,10 +12,12 @@ import sys
 class CancelRequested(KeyboardInterrupt):
     def __init__(self, signum):
         super().__init__(f"Cancellation requested ({signal.Signals(signum).name})")
+        self.ru = "Отмена запрошена пользователем."
 
 
 class OperationSignals:
-    def __init__(self):
+    def __init__(self, lang="en"):
+        self.lang = lang
         self.depth = 0
         self.pending = None
         self.previous = {}
@@ -23,8 +25,10 @@ class OperationSignals:
     def handle(self, signum, frame):
         self.pending = signum
         if self.depth:
-            print("Cancellation deferred: waiting for the active write/cleanup and journal. "
-                  "Do not disconnect USB.", file=sys.stderr, flush=True)
+            message = ("Отмена принята. Ожидаю завершения текущей записи/очистки и сохранения журнала. "
+                       "Не отключайте USB." if self.lang == "ru" else
+                       "Cancellation deferred: waiting for the active write/cleanup and journal. Do not disconnect USB.")
+            print(message, file=sys.stderr, flush=True)
             return
         raise CancelRequested(signum)
 

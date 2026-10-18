@@ -8,7 +8,7 @@ foreach ($taskRequired in @($taskPython, (Join-Path $taskPlatformTools 'adb.exe'
                           (Join-Path $taskPlatformTools 'fastboot.exe'),
                           (Join-Path $taskUsbDirectory 'libusb-1.0.dll'))) {
     if (-not (Test-Path -LiteralPath $taskRequired -PathType Leaf)) {
-        throw "Missing local dependency: $taskRequired. See README.md#setup."
+        throw "Не найден файл зависимости: $taskRequired. Выполните установку из исходников по разделу Windows в README.md."
     }
 }
 $taskOriginalPath = $env:PATH

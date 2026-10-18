@@ -23,7 +23,7 @@ class RuntimePathTests(unittest.TestCase):
                              [sys.executable, "--internal-tool", "backup_chkcode.py", "-o", "x"])
 
     def test_frozen_receipts_use_executable_directory_not_bundle_or_cwd(self):
-        exe = Path.cwd() / "portable" / "unmuda.exe"
+        exe = Path.cwd() / "portable" / "balmunlock.exe"
         with patch.object(runtime_paths.sys, "frozen", True, create=True), \
                 patch.object(runtime_paths.sys, "executable", str(exe)):
             self.assertEqual(runtime_paths.session_root(), exe.parent)
@@ -37,14 +37,14 @@ class RuntimePathTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime_paths.tool_command("untrusted.py")
         with patch.object(launcher, "configure_runtime"), \
-                patch.object(sys, "argv", ["unmuda", "--internal-tool", "untrusted.py"]), \
+                patch.object(sys, "argv", ["balmunlock", "--internal-tool", "untrusted.py"]), \
                 patch.object(launcher.runpy, "run_module") as run:
             self.assertEqual(launcher.main(), 2)
             run.assert_not_called()
 
     def test_frozen_helper_dispatch_preserves_arguments_and_does_not_run_controller(self):
         with patch.object(launcher, "configure_runtime"), \
-                patch.object(sys, "argv", ["unmuda", "--internal-tool", "backup_chkcode.py", "-o", "path with spaces"]), \
+                patch.object(sys, "argv", ["balmunlock", "--internal-tool", "backup_chkcode.py", "-o", "path with spaces"]), \
                 patch.object(launcher.runpy, "run_module") as run:
             self.assertEqual(launcher.main(), 0)
             self.assertEqual(sys.argv, ["backup_chkcode.py", "-o", "path with spaces"])

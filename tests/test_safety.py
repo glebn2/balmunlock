@@ -26,7 +26,7 @@ ORIGINAL = bytes(range(256)) * (backup.CHKCODE_SIZE // 256)
 
 class BackupTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=TOOLS.parent)
+        self.tmp = tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=TOOLS.parent)
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "chkcode_backup.bin"
 
@@ -229,7 +229,7 @@ class WorkflowFixture(unittest.TestCase):
     isolate_session_routing = True
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=TOOLS.parent)
+        self.tmp = tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=TOOLS.parent)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.host = FakeHost()

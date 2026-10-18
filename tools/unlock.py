@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 import hashlib
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -22,17 +25,19 @@ from device_policy import validate_identity
 from operation_signals import OperationSignals
 from session_lock import session_lock
 from session_store import SessionStore, valid_serial
-from runtime_paths import VERSION, frozen, session_root, tool_command
+from runtime_paths import APP_NAME, VERSION, frozen, session_root, tool_command
 
 ROOT = session_root()
 
 
 def recovery_command():
-    return ".\\unmuda.exe --recover" if frozen() else "python tools/unlock.py --recover"
+    return ".\\balmunlock.exe --recover" if frozen() else "python tools/unlock.py --recover"
 
 
 class Stop(RuntimeError):
-    pass
+    def __init__(self, message, ru=None):
+        super().__init__(message)
+        self.ru = ru
 
 
 class AlreadyUnlocked(Stop):
@@ -76,9 +81,13 @@ def preflight(lang: str) -> bool:
 
 
 class Workflow:
-    def __init__(self, lang="ru", interactive=False):
+    def __init__(self, lang="ru", interactive=False, verbose=False):
         self.lang = lang
         self.interactive = interactive
+        self.verbose = verbose
+        self.introduced = False
+        self.session_announced = False
+        self.log_warning = False
         self.serial = None
         self.root = ROOT
         self.session_serial = None
@@ -89,13 +98,59 @@ class Workflow:
         self.marker_verified = False
         self.original = None
         self.state = {}
-        self.signals = OperationSignals()
+        self.signals = OperationSignals(lang)
         self.env = os.environ.copy()
         self.initial_serial = self.env.get("ANDROID_SERIAL")
         self.env["PYTHONUTF8"] = "1"
+        self.env["BALMUNLOCK_CONTROLLER"] = "1"
 
     def say(self, ru, en):
         print(ru if self.lang == "ru" else en, flush=True)
+
+    def introduce(self):
+        if not self.introduced:
+            print(f"{APP_NAME} {VERSION}", flush=True)
+            self.introduced = True
+
+    def show_directory(self):
+        if not self.session_announced:
+            self.say(f"Бэкапы и журналы: {self.root}", f"Backups and logs: {self.root}")
+            self.session_announced = True
+
+    def detail(self, text):
+        """Best-effort diagnostics must never change a verified write result."""
+        try:
+            with (self.root / "balmunlock.log").open("a", encoding="utf-8") as stream:
+                stream.write(f"{datetime.now(timezone.utc).isoformat()} | {text}\n")
+        except OSError:
+            if not self.log_warning:
+                self.say("Не удалось сохранить диагностический журнал. Проверьте место на диске и право записи в папку.",
+                         "Could not save the diagnostic log. Check free disk space and directory write permissions.")
+                self.log_warning = True
+
+    def show_error(self, error):
+        self.detail(f"ERROR {type(error).__name__}: {error}")
+        message = getattr(error, "ru", None) if self.lang == "ru" else None
+        label = "Причина" if self.lang == "ru" else "Reason"
+        lines = str(error).splitlines()
+        fallback = "Операция прервана." if self.lang == "ru" else "Operation interrupted."
+        print(f"{label}: {message or (lines[0] if lines else fallback)}", file=sys.stderr, flush=True)
+        if self.verbose and message:
+            print(str(error), file=sys.stderr, flush=True)
+
+    def phase_label(self, phase):
+        if phase in ("reboot_submitted", "already_unlocked"):
+            return "анлок завершён" if self.lang == "ru" else "unlock completed"
+        if phase in ("prepared", "backup_ready"):
+            return "бэкапы сохранены, анлок не начат" if self.lang == "ru" else "backups saved; unlock not started"
+        if phase in ("rollback_reboot_submitted", "rollback_diag_verified", "recovery_android_online", "recovery_reboot_submitted"):
+            return "откат завершён" if self.lang == "ru" else "rollback completed"
+        labels = {"new": ("новый сеанс", "new session"),
+                  "invalid": ("журнал требует проверки", "receipt needs inspection"),
+                  "cleanup_pending": ("нужна очистка временных настроек", "temporary settings need cleanup"),
+                  "backup_without_receipt": ("бэкап без журнала", "backup without a receipt")}
+        ru, en = labels.get(phase, ("нужно завершить восстановление", "recovery needs completion"))
+        return ru if self.lang == "ru" else en
 
     def ask(self, ru, en):
         self.say(ru + " [yes/N]", en + " [yes/N]")
@@ -109,11 +164,16 @@ class Workflow:
                      "Enter yes to continue, or no/Enter to stop.")
 
     def retry(self, ru, en):
-        return self.interactive and self.ask(ru, en)
+        if not self.interactive:
+            return False
+        if not self.ask(ru, en):
+            raise Declined("Retry declined by the user")
+        return True
 
     def bind_session(self, session):
         if session.error:
-            raise Stop(f"Saved session is invalid: {session.root}. {session.error}. Files retained.")
+            raise Stop(f"Saved session is invalid: {session.root}. {session.error}. Files retained.",
+                       "Файлы сеанса повреждены или противоречат друг другу. Сохраните папку и проверьте исходные копии журналов.")
         if self.initial_serial and session.serial and self.initial_serial != session.serial:
             raise Stop("Selected session conflicts with ANDROID_SERIAL; no device command sent")
         self.root = session.root
@@ -124,22 +184,27 @@ class Workflow:
         self.receipt = self.root / "chkcode_backup.device.json"
         if session.serial:
             self.env["ANDROID_SERIAL"] = session.serial
-        self.say(f"Выбран сеанс телефона {session.serial or 'с неустановленным серийным номером'}: {self.root}",
-                 f"Selected device session {session.serial or '(unknown serial)'}: {self.root}")
+        self.say(f"Серийный номер: {session.serial or 'не установлен'}", f"Serial: {session.serial or 'unknown'}")
+        self.session_announced = False
+        self.show_directory()
 
-    def choose_session(self, entries):
-        self.say("Сохранённые сеансы (файлы не перемещаются и не удаляются):",
-                 "Saved sessions (files are not moved or deleted):")
+    def choose_session(self, entries, allow_refresh=False):
+        self.say("Сохранённые сеансы:", "Saved sessions:")
         for index, entry in enumerate(entries, 1):
-            print(f"  {index}. {entry.serial or '?'} | {entry.phase} | {entry.key}", flush=True)
+            print(f"  {index}. {entry.serial or '?'} — {self.phase_label(entry.phase)}", flush=True)
+            if self.verbose:
+                print(f"     {entry.key}", flush=True)
         if not self.interactive:
             raise Stop("Select a saved session with --session SERIAL_OR_KEY; see --list-sessions")
-        self.say("Введите номер нужного сеанса или нажмите Enter для выхода. "
-                 "Если нужен новый телефон, подключите его и заново запустите программу.",
-                 "Enter a session number, or press Enter to stop. "
-                 "For a new phone, connect it and relaunch the program.")
+        self.say("Введите номер сеанса или нажмите Enter для выхода.",
+                 "Enter a session number, or press Enter to stop.")
+        if allow_refresh:
+            self.say("Для нового телефона: подключите его и введите r для повторного поиска.",
+                     "For a new phone: connect it and enter r to search again.")
         while True:
             answer = input().strip()
+            if allow_refresh and answer.lower() == "r":
+                return None
             if answer.lower() in ("", "no", "n", "нет"):
                 raise Declined("Session selection cancelled")
             if answer.isascii() and answer.isdigit() and 1 <= int(answer) <= len(entries):
@@ -199,20 +264,26 @@ class Workflow:
                         return True
                     return False
                 elif found[serial] == {"fastboot"}:
+                    self.say("Телефон в загрузчике, но подходящий сеанс не найден. Для восстановления нужны его исходные бэкапы. "
+                             "Если они лежат рядом с программой без журнала, выберите --session legacy. "
+                             "Для первого анлока телефон должен быть загружен в Android.",
+                             "The phone is in fastboot without a matching session. Recovery needs its original backups. "
+                             "For older backups without a receipt beside the program, use --session legacy. "
+                             "A first unlock must start from Android.")
                     raise Stop("Phone is in fastboot without a matching saved session. "
                                "Use its original backup folder or --session legacy if old backups have no receipt. "
                                "For a first unlock, return the unmodified phone to Android first.")
                 else:
-                    self.say("Новый серийный номер: будет создан отдельный сеанс. Бэкапы других телефонов сохраняются.",
-                             "New serial: creating a separate session. Other phones' backups are retained.")
+                    self.say("Новый телефон: создаю отдельный сеанс.", "New phone: creating a separate session.")
                     session = store.create(serial)
                 self.bind_session(session)
                 return True
             if entries:
-                self.say("Телефон пока не обнаружен. Можно выбрать сохранённый сеанс для продолжения "
-                         "или подключить новый телефон и перезапустить программу.",
-                         "No phone detected. Select a saved session to continue, or connect a new phone and relaunch.")
-                session = self.choose_session(entries) if self.interactive or len(entries) > 1 else entries[0]
+                self.say("Телефон пока не обнаружен. Выберите сохранённый сеанс или повторите поиск после подключения.",
+                         "No phone detected. Select a saved session, or search again after connecting a phone.")
+                session = self.choose_session(entries, allow_refresh=True) if self.interactive or len(entries) > 1 else entries[0]
+                if session is None:
+                    continue
                 self.bind_session(session)
                 return True
             if args.recover:
@@ -232,11 +303,15 @@ class Workflow:
                                     encoding="utf-8", errors="replace", timeout=timeout,
                                     **self.signals.child_options())
         except subprocess.TimeoutExpired as error:
-            raise Stop(f"Command timed out ({timeout}s): {args[0:3]}") from error
+            self.detail(f"TIMEOUT {timeout}s: {args[0:3]}")
+            raise Stop(f"Command timed out ({timeout}s): {args[0:3]}",
+                       "Команда не завершилась за отведённое время. Проверьте подключение телефона; подробности в журнале.") from error
         except OSError as error:
-            raise Stop(str(error)) from error
+            raise Stop(str(error), f"Не удалось запустить {args[0]}. Проверьте файлы сборки или зависимости по README.md.") from error
+        self.detail(f"COMMAND {list(map(str, args))}\nEXIT {result.returncode}\n{result.stdout}\n{result.stderr}")
         if check and result.returncode:
-            raise Stop(f"Command failed: {args}\n{result.stdout}\n{result.stderr}")
+            raise Stop(f"Command failed: {args}\n{result.stdout}\n{result.stderr}",
+                       "Команда завершилась с ошибкой. Подробности сохранены в журнале; следуйте указаниям восстановления ниже.")
         return result
 
     def tool(self, name, *args, check=True):
@@ -269,8 +344,9 @@ class Workflow:
             if name == "cve31317.py":
                 # The child can be killed by timeout/Ctrl+C before its finally.
                 self.cleanup_cve()
-        print(result.stdout, end="", flush=True)
-        print(result.stderr, end="", file=sys.stderr, flush=True)
+        if self.verbose:
+            print(result.stdout, end="", flush=True)
+            print(result.stderr, end="", file=sys.stderr, flush=True)
         return result
 
     def cleanup_cve(self):
@@ -545,24 +621,40 @@ class Workflow:
 
     def check_bootloader(self, identity):
         """Check the driver and locked bootloader before any CVE or marker write."""
-        self.say("Проверка fastboot до записи сервисной метки. Телефон перезагрузится. "
-                 "Если нужен драйвер Windows: Zadig → Device → Load Preset Device → "
-                 "tools/balmuda-fastboot.cfg → WinUSB (18D1:D00D). Ожидание до 5 минут.",
-                 "Checking fastboot before writing the service marker. The phone will reboot. "
-                 "If Windows needs a driver: Zadig > Device > Load Preset Device > "
-                 "tools/balmuda-fastboot.cfg > WinUSB (18D1:D00D). Waiting up to 5 minutes.")
+        self.say("Проверка загрузчика. Телефон перезагрузится в fastboot; анлок пока не начинается.",
+                 "Checking the bootloader. The phone will reboot into fastboot; unlocking has not started.")
+        if os.name == "nt":
+            self.say("Если понадобится драйвер: Zadig (https://zadig.akeo.ie/) → Device → Load Preset Device → "
+                     "tools/balmuda-fastboot.cfg → WinUSB для 18D1:D00D. Ожидаю подключение до 5 минут.",
+                     "If a driver is needed: Zadig (https://zadig.akeo.ie/) > Device > Load Preset Device > "
+                     "tools/balmuda-fastboot.cfg > WinUSB for 18D1:D00D. Waiting up to 5 minutes.")
+        else:
+            self.say("Ожидаю fastboot до 5 минут. Если телефон не обнаружен, проверьте USB-права/udev для 18D1:D00D.",
+                     "Waiting up to 5 minutes for fastboot. If missing, check USB permissions/udev for 18D1:D00D.")
         self.run(["adb", "-s", self.serial, "reboot", "bootloader"])
         while True:
             try:
                 self.wait_fastboot(timeout=300)
                 break
             except Stop as error:
-                if self.retry("Fastboot пока не обнаружен. Установите WinUSB для 18D1:D00D через "
-                              "Zadig → Device → Load Preset Device → tools/balmuda-fastboot.cfg. "
-                              "Телефон оставьте в загрузчике. Драйвер установлен — проверить снова?",
-                              "Fastboot is not detected yet. Install WinUSB for 18D1:D00D using "
-                              "Zadig > Device > Load Preset Device > tools/balmuda-fastboot.cfg. "
-                              "Keep the phone in the bootloader. Driver installed — check again?"):
+                if os.name == "nt":
+                    self.say("Fastboot не обнаружен. Установите WinUSB для 18D1:D00D через "
+                             "Zadig → Device → Load Preset Device → tools/balmuda-fastboot.cfg.",
+                             "Fastboot is not detected. Install WinUSB for 18D1:D00D using "
+                             "Zadig > Device > Load Preset Device > tools/balmuda-fastboot.cfg.")
+                else:
+                    self.say("Fastboot не обнаружен. Проверьте USB-права/udev для 18D1:D00D и кабель.",
+                             "Fastboot is not detected. Check USB permissions/udev for 18D1:D00D and the cable.")
+                try:
+                    again = self.retry("Телефон оставьте в загрузчике. После исправления проверить снова?",
+                                       "Keep the phone in the bootloader. Check again after fixing the connection?")
+                except Declined:
+                    self.say("Начальная проверка остановлена до записи метки. Телефон пока в загрузчике; "
+                             "верните его в Android долгим удержанием кнопки питания.",
+                             "Initial check stopped before any marker write. The phone remains in the bootloader; "
+                             "return it to Android by holding its power button.")
+                    raise
+                if again:
                     continue
                 raise Stop("Fastboot driver check failed before any chkcode write. "
                            "Install the bootloader driver, restart the phone into Android "
@@ -584,7 +676,11 @@ class Workflow:
             try:
                 self.fastboot("reboot", timeout=15)
             except (Stop, KeyboardInterrupt) as error:
-                print(f"Return to Android not confirmed: {error}", file=sys.stderr, flush=True)
+                self.detail(f"Return to Android not confirmed: {error}")
+                self.say("Возврат в Android не подтверждён. При начальной проверке метка ещё не записывалась; "
+                         "если телефон остался в загрузчике, перезапустите его долгим удержанием кнопки питания.",
+                         "Return to Android was not confirmed. No marker was written during this initial check; "
+                         "if still in the bootloader, restart the phone by holding its power button.")
             raise
         self.fastboot("reboot", timeout=15)
         self.say("Fastboot проверен. Ожидание Android и повторная проверка телефона...",
@@ -610,10 +706,10 @@ class Workflow:
             if code == 3:
                 raise Stop("DIAG identity is ambiguous or belongs to another phone. No retry of partition operations.")
             if os.name == "nt":
-                self.say("DIAG пока недоступен. Оставьте телефон подключённым. В Zadig включите Options → List All Devices, "
+                self.say("DIAG пока недоступен. Оставьте телефон подключённым. В Zadig (https://zadig.akeo.ie/) включите Options → List All Devices, "
                          "выберите BALMUDA_Android (Interface 0), проверьте USB ID 0482:0A9D и установите WinUSB. "
                          "Дождитесь завершения установки драйвера.",
-                         "DIAG is not accessible yet. Keep the phone connected. In Zadig enable Options > List All Devices, "
+                         "DIAG is not accessible yet. Keep the phone connected. In Zadig (https://zadig.akeo.ie/) enable Options > List All Devices, "
                          "select BALMUDA_Android (Interface 0), verify USB ID 0482:0A9D and install WinUSB. Wait for installation to finish.")
             else:
                 self.say("DIAG пока недоступен. Проверьте USB-права/udev для 0482:0A9D, кабель и привязку qcserial.",
@@ -626,8 +722,10 @@ class Workflow:
                 raise Declined("DIAG setup paused by the user; no marker write.")
 
     def activate_diag(self):
-        self.say("Включение DIAG. Если понадобится драйвер, программа покажет шаги установки.",
-                 "Enabling DIAG. Driver installation steps will appear if needed.")
+        self.say("Подготовка диагностического режима DIAG. Это может занять несколько минут; "
+                 "дождитесь следующего сообщения. При необходимости появится инструкция установки драйвера.",
+                 "Preparing DIAG diagnostics. This may take a few minutes; wait for the next message. "
+                 "Driver installation steps will appear if needed.")
         self.tool("cve31317.py")
         self.wait_prop("sys.usb.config", "diag,modem,adb")
         self.ensure_diag()
@@ -657,11 +755,15 @@ class Workflow:
                     "ro.build.version.security_patch", "ro.build.version.sdk"):
             result = self.run(["adb", "-s", self.serial, "shell", "getprop", key])
             identity[key] = result.stdout.strip()
-        validate_identity(identity)
-        print(json.dumps({"serial": self.serial, **identity}, ensure_ascii=False), flush=True)
+        validate_identity(identity, lang=self.lang)
+        self.detail(json.dumps({"serial": self.serial, **identity}, ensure_ascii=False))
+        self.say(f"Телефон: {identity['ro.product.model']}, Android 12, прошивка {identity['ro.build.version.incremental']}.",
+                 f"Phone: {identity['ro.product.model']}, Android 12, build {identity['ro.build.version.incremental']}.")
         if not prepare_only:
             self.check_bootloader(identity)
         self.activate_diag()
+        self.say("Создание бэкапов. Служебный раздел будет полностью прочитан дважды; запись в него ещё не начинается.",
+                 "Creating backups. The service partition will be read twice in full; partition writes have not started.")
         self.tool("backup_chkcode.py", "-o", str(self.backup))
         original = self.original = load_backup(self.backup)
         # An independently validated local copy survives loss/corruption of one
@@ -671,6 +773,8 @@ class Workflow:
         self.state = {"version": 1, "serial": self.serial, **identity,
                       "sha256": hashlib.sha256(original).hexdigest()}
         self.save_state("backup_ready")
+        self.say("Две проверенные копии служебного раздела и журнал сохранены.",
+                 "Two verified service-partition copies and the receipt have been saved.")
         if prepare_only:
             self.save_state("prepared")
             self.say("Подготовка завершена: две проверенные копии chkcode и журнал сохранены. "
@@ -697,7 +801,7 @@ class Workflow:
             result = self.run(["adb", "-s", self.serial, "shell", "getprop", key])
             if result.stdout.strip() != self.state.get(key):
                 raise Stop(f"Prepared device identity changed: {key}. No marker write.")
-        validate_identity(self.state)
+        validate_identity(self.state, lang=self.lang)
         if self.interactive:
             # Prove the marker is absent before rebooting a resumed device.
             self.activate_diag()
@@ -719,8 +823,8 @@ class Workflow:
 
     def unlock_from_backup(self):
         image = self.checked_original()
-        self.say("Проверенный бэкап сохранён. Сейчас будет записана сервисная метка.",
-                 "Verified backup saved. The service marker will now be written.")
+        self.say("Бэкапы проверены. Записывается служебная метка; не отключайте USB и дождитесь запроса на телефоне.",
+                 "Backups verified. Writing the service marker; keep USB connected and wait for the phone's confirmation screen.")
         # Conservatively assume a partial write even if the helper fails.
         with self.signals.defer():
             self.marker_possible = True
@@ -734,12 +838,16 @@ class Workflow:
         self.wait_fastboot()
         if self.is_userspace() is not False:
             raise Stop("Device is in fastbootd, not the bootloader. No unlock attempted.")
-        self.say("Подтвердите разблокировку на экране телефона. Ожидаю до 5 минут...",
-                 "Confirm the unlock on the phone. Waiting up to 5 minutes...")
+        self.say("На телефоне кнопками громкости выберите Unlock the bootloader и подтвердите по подсказке экрана "
+                 "(на A101BM — кнопкой питания). Данные будут стёрты. Ожидаю подтверждение до 5 минут...",
+                 "On the phone, use the volume buttons to select Unlock the bootloader, then confirm as shown "
+                 "(power button on A101BM). Data will be erased. Waiting up to 5 minutes...")
         self.save_state("unlock_requested")
         self.fastboot("flashing", "unlock", timeout=180)
         self.wait_unlocked()
         self.save_state("unlock_verified")
+        self.say("Разблокировка подтверждена. Восстанавливаю исходный служебный раздел; не отключайте USB.",
+                 "Unlock confirmed. Restoring the original service partition; keep USB connected.")
         # Revalidate the disk image immediately before flash; no zero image.
         image = self.checked_original()
         with self.signals.defer():
@@ -751,10 +859,10 @@ class Workflow:
         self.signals.checkpoint()
         self.fastboot("reboot", timeout=15)
         self.save_state("reboot_submitted", reboot_pending=False)
-        self.say("Fastboot подтвердил восстановление chkcode и принял перезагрузку. "
-                 "Загрузку Android проверьте на телефоне.",
-                 "Fastboot confirmed chkcode restore and accepted reboot. "
-                 "Check Android boot on the phone.")
+        self.say("Fastboot подтвердил прошивку исходного chkcode и принял перезагрузку. "
+                 "Дождитесь приветственного экрана Android. Папку с бэкапами сохраните.",
+                 "Fastboot confirmed flashing the original chkcode and accepted reboot. "
+                 "Wait for Android's welcome screen and retain the backup directory.")
 
     def recovery_notice(self):
         if not self.marker_possible and not self.state.get("reboot_pending"):
@@ -766,11 +874,12 @@ class Workflow:
                  f"Для продолжения восстановления: {recovery_command()}",
                  "Do not rerun full unlock. "
                  f"To resume recovery: {recovery_command()}")
-        print(f"Serial: {self.serial}\nBackup: {self.backup}\nSecond copy: {self.recovery_backup}"
-              f"\nReceipt: {self.receipt}", flush=True)
+        self.say(f"Исходный телефон: {self.serial}\nСохраните всю папку: {self.root}",
+                 f"Original phone: {self.serial}\nRetain the complete directory: {self.root}")
 
     def record_error(self, error):
-        path = self.root / "unmuda-last-error.txt"
+        self.detail(f"ERROR {type(error).__name__}: {error}")
+        path = self.root / "balmunlock-last-error.txt"
         try:
             path.write_text(f"Phase: {self.state.get('phase', 'before backup')}\n"
                             f"Serial: {self.serial or 'not selected'}\n{type(error).__name__}: {error}\n",
@@ -805,7 +914,7 @@ class Workflow:
         identity = {}
         for key in ("ro.product.model", "ro.build.version.incremental", "ro.build.version.security_patch", "ro.build.version.sdk"):
             identity[key] = self.run(["adb", "-s", self.serial, "shell", "getprop", key]).stdout.strip()
-        validate_identity(identity)
+        validate_identity(identity, lang=self.lang)
         self.activate_diag()
         self.tool("verify_chkcode.py", "--backup", str(images[0][0]))
         original = images[0][1]
@@ -833,7 +942,7 @@ class Workflow:
                     return 0
             except (Stop, OSError, ValueError) as error:
                 self.record_error(error)
-                print(str(error), file=sys.stderr, flush=True)
+                self.show_error(error)
             if not self.ask("Восстановление пока не завершено. Подключите исходный телефон, проверьте кабель "
                             "и драйвер его текущего режима. Повторить только восстановление?",
                             "Recovery is unfinished. Connect the original phone and check the cable and driver "
@@ -842,8 +951,8 @@ class Workflow:
                 return 1
 
     def guided(self, args):
-        print(f"unmuda {VERSION}", flush=True)
-        self.say(f"Папка сеанса: {self.root}", f"Session directory: {self.root}")
+        self.introduce()
+        self.show_directory()
         terminal = {"reboot_submitted", "rollback_reboot_submitted", "rollback_diag_verified",
                     "recovery_android_online", "recovery_reboot_submitted", "already_unlocked"}
         while True:
@@ -874,10 +983,13 @@ class Workflow:
                              f"Saved session: {self.state.get('ro.product.model', 'BALMUDA')}, "
                              f"device {self.serial}, phase {phase}. Backups verified.")
                     if self.marker_possible or self.state.get("reboot_pending"):
-                        if not self.ask("Предыдущая операция не завершена. Вернуть исходный chkcode/завершить "
-                                        "перезагрузку? Это восстановление, без нового анлока.",
-                                        "The earlier operation is unfinished. Restore original chkcode/finish reboot? "
-                                        "This is recovery, without starting another unlock."):
+                        if self.marker_possible:
+                            ru, en = ("Предыдущий анлок прерван. Восстановить исходный служебный раздел? Новый анлок не начинается.",
+                                      "The previous unlock was interrupted. Restore the original service partition? No new unlock will start.")
+                        else:
+                            ru, en = ("Исходный раздел уже восстановлен. Завершить перезагрузку без повторной прошивки?",
+                                      "The original partition is already restored. Finish reboot without flashing again?")
+                        if not self.ask(ru, en):
                             return 0
                         return self.guided_recover()
                     if phase in terminal:
@@ -924,11 +1036,11 @@ class Workflow:
                 if args.unlock_prepared:
                     raise Stop("No prepared session exists in this directory. Start normally to create verified backups first.")
                 if not self.ask("Подготовить DIAG и бэкапы без анлока?" if args.prepare else
-                                "Начать анлок? Все пользовательские данные будут СТЁРТЫ. Сохраните нужные файлы "
-                                "и оставайтесь рядом для подтверждения на телефоне.",
+                                "Проверить телефон и начать анлок, если он нужен? Разблокировка СТИРАЕТ пользовательские данные. "
+                                "Сохраните нужные файлы и оставайтесь рядом. Уже открытый загрузчик повторно не разблокируется.",
                                 "Prepare DIAG and backups without unlocking?" if args.prepare else
-                                "Start unlocking? All user data will be ERASED. Back up required files "
-                                "and stay nearby to confirm on the phone."):
+                                "Check the phone and unlock if needed? Unlocking ERASES user data. "
+                                "Back up required files and stay nearby. An already unlocked bootloader will not be unlocked again."):
                     return 0
                 self.check_host()
                 self.execute(prepare_only=args.prepare)
@@ -949,20 +1061,24 @@ class Workflow:
                 self.record_error(error)
                 self.say("Операция не завершена. Бэкапы и журнал не удаляются.",
                          "The operation is unfinished. Backups and the receipt are retained.")
-                print(f"Details: {error}", file=sys.stderr, flush=True)
+                self.show_error(error)
                 if self.marker_possible or self.state.get("reboot_pending"):
-                    self.say("Метка могла быть записана. Сначала выполняется восстановление исходного сеанса.",
-                             "The marker may have been written. Recovering the original session first.")
+                    if self.marker_possible:
+                        self.say("Метка могла быть записана. Сначала восстанавливается исходный служебный раздел.",
+                                 "The marker may have been written. Restoring the original service partition first.")
+                    else:
+                        self.say("Исходный раздел уже восстановлен. Осталось завершить перезагрузку; повторной прошивки не будет.",
+                                 "The original partition is already restored. Only reboot remains; no repeat flash.")
                     self.guided_recover()
                     return 1
                 if isinstance(error, KeyboardInterrupt):
                     return 1
                 self.say("В этом запуске запись метки не начиналась. Если проблема с USB — исправьте соединение/драйвер. "
                          "Если повреждены бэкап или журнал — восстановите их из сохранённой копии. "
-                         "Не удаляйте файлы и не пересоздавайте SHA. Для помощи сохраните эту папку и unmuda-last-error.txt.",
+                         "Не удаляйте файлы и не пересоздавайте SHA. Для помощи сохраните эту папку и balmunlock-last-error.txt.",
                          "No marker write started in this run. Fix USB/driver issues, or restore damaged backup/receipt "
                          "files from a known good copy. Do not delete files or regenerate SHA. "
-                         "For assistance retain this folder and unmuda-last-error.txt.")
+                         "For assistance retain this folder and balmunlock-last-error.txt.")
                 if not self.ask("После исправления повторить проверку сохранённого состояния в этом окне?",
                                 "After fixing the cause, recheck the saved state in this window?"):
                     return 1
@@ -974,7 +1090,14 @@ class Workflow:
                         self.env["ANDROID_SERIAL"] = self.initial_serial
 
     def check_host(self):
-        if preflight(self.lang):
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            available = preflight(self.lang)
+        self.detail(output.getvalue())
+        if self.verbose:
+            print(output.getvalue(), end="", flush=True)
+        if available:
+            self.say("Проверка файлов программы и зависимостей: OK.", "Program files and dependencies: OK.")
             return
         if frozen():
             self.say("Не хватает файлов portable-сборки. Распакуйте весь ZIP, включая _internal и platform-tools, "
@@ -988,18 +1111,29 @@ class Workflow:
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--lang", choices=("ru", "en"), default="ru")
+    language = argparse.ArgumentParser(add_help=False, prog=APP_NAME)
+    language.add_argument("--lang", choices=("ru", "en"), default="ru")
+    selected_language, _ = language.parse_known_args()
+    def help_text(ru, en):
+        return ru if selected_language.lang == "ru" else en
+    parser = argparse.ArgumentParser(prog=APP_NAME, description=help_text(
+        "Пошаговая разблокировка загрузчика BALMUDA Phone. Обычный запуск сам выбирает сеанс телефона.",
+        "Guided BALMUDA Phone bootloader unlocking. A normal launch selects the phone's session automatically."))
+    parser.add_argument("--lang", choices=("ru", "en"), default="ru", help=help_text("язык сообщений и справки", "message and help language"))
+    parser.add_argument("--version", action="version", version=f"{APP_NAME} {VERSION}")
+    parser.add_argument("--verbose", action="store_true", help=help_text(
+        "показывать технические подробности в консоли; они также сохраняются в balmunlock.log",
+        "show technical console output; details are also saved to balmunlock.log"))
     interaction = parser.add_mutually_exclusive_group()
-    interaction.add_argument("--guided", action="store_true", help="enable guided prompts, also with redirected stdin")
-    interaction.add_argument("--non-interactive", action="store_true", help="stop on errors instead of offering guided retries")
-    parser.add_argument("--session", metavar="SERIAL_OR_KEY", help="select an existing device session without automatic discovery")
+    interaction.add_argument("--guided", action="store_true", help=help_text("включить вопросы также при перенаправленном вводе", "enable guided prompts, also with redirected stdin"))
+    interaction.add_argument("--non-interactive", action="store_true", help=help_text("при ошибке завершать работу без предложения повторить", "stop on errors instead of offering guided retries"))
+    parser.add_argument("--session", metavar="SERIAL_OR_KEY", help=help_text("выбрать сохранённый сеанс; legacy — старые файлы рядом с программой", "select a saved session; legacy selects older files beside the program"))
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--preflight", action="store_true", help="host checks only; no ADB/USB")
-    mode.add_argument("--recover", action="store_true", help="resume chkcode recovery from the saved device receipt")
-    mode.add_argument("--prepare", action="store_true", help="activate DIAG and back up chkcode; stop before marker/unlock")
-    mode.add_argument("--unlock-prepared", action="store_true", help="START UNLOCK using the checked prepared session; erases user data")
-    mode.add_argument("--list-sessions", action="store_true", help="list saved device sessions without ADB/USB access")
+    mode.add_argument("--preflight", action="store_true", help=help_text("подробно проверить зависимости на ПК, без ADB/USB", "detailed host checks only; no ADB/USB"))
+    mode.add_argument("--recover", action="store_true", help=help_text("продолжить восстановление исходного раздела без нового анлока", "resume recovery of the original partition without a new unlock"))
+    mode.add_argument("--prepare", action="store_true", help=help_text("подготовить DIAG и бэкапы, без метки и анлока", "prepare DIAG and backups without a marker or unlock"))
+    mode.add_argument("--unlock-prepared", action="store_true", help=help_text("начать анлок из сохранённой подготовки; стирает данные", "START UNLOCK from saved preparation; erases user data"))
+    mode.add_argument("--list-sessions", action="store_true", help=help_text("показать сохранённые сеансы без ADB/USB", "list saved sessions without ADB/USB access"))
     args = parser.parse_args()
     if args.preflight:
         return 0 if preflight(args.lang) else 1
@@ -1008,15 +1142,17 @@ def main():
             entries = SessionStore(ROOT).entries()
             if not entries:
                 print("Сохранённых сеансов нет." if args.lang == "ru" else "No saved sessions.")
+            listing = Workflow(args.lang)
             for entry in entries:
-                print(f"{entry.serial or '?'} | {entry.phase} | {entry.key}\n  {entry.root}")
+                print(f"{entry.serial or '?'} | {listing.phase_label(entry.phase)} | {entry.key}\n  {entry.root}")
                 if entry.error:
                     print(f"  ERROR: {entry.error}")
             return 0
         except (OSError, ValueError) as error:
             print(f"STOP: {error}", file=sys.stderr)
             return 1
-    flow = Workflow(args.lang, interactive=not args.non_interactive and (args.guided or sys.stdin.isatty()))
+    flow = Workflow(args.lang, interactive=not args.non_interactive and (args.guided or sys.stdin.isatty()), verbose=args.verbose)
+    flow.introduce()
     if flow.interactive:
         try:
             with session_lock(ROOT / ".unlock.lock"), flow.signals:
@@ -1024,6 +1160,7 @@ def main():
                     return 0
                 return flow.guided(args)
         except (Declined, EOFError):
+            flow.say("Остановлено по вашему выбору. Бэкапы сохранены.", "Stopped at your request. Backups retained.")
             return 0
         except (Stop, OSError, ValueError, KeyboardInterrupt, EOFError) as error:
             flow.record_error(error)
@@ -1031,7 +1168,7 @@ def main():
                      "проверьте список через --list-sessions. После устранения причины повторите запуск.",
                      "Cannot select or open the session. See the reason below and retain the backups. "
                      "Use --list-sessions to inspect saved sessions, fix the cause and relaunch.")
-            print(f"Details: {error}", file=sys.stderr, flush=True)
+            flow.show_error(error)
             flow.recovery_notice()
             return 1
     if args.prepare:
@@ -1058,8 +1195,7 @@ def main():
                     return 0
                 flow.load_session()
                 return 0 if flow.recover() else 1
-            if not preflight(args.lang):
-                return 1
+            flow.check_host()
             try:
                 if args.prepare:
                     flow.execute(prepare_only=True)
@@ -1068,18 +1204,21 @@ def main():
                 else:
                     flow.execute()
             except (Stop, OSError, ValueError, KeyboardInterrupt, EOFError) as error:
-                print(f"STOP: {error}", file=sys.stderr, flush=True)
+                flow.record_error(error)
+                flow.show_error(error)
                 if flow.marker_possible or flow.state.get("reboot_pending"):
                     try:
                         flow.save_state("error", failed_phase=flow.state.get("phase"), original_error=str(error))
                         restored = flow.recover()
-                        print("ROLLBACK OK" if restored else "ROLLBACK PENDING", file=sys.stderr, flush=True)
+                        flow.say("Откат завершён." if restored else "Восстановление нужно продолжить.",
+                                 "Rollback completed." if restored else "Recovery needs completion.")
                     except (Stop, OSError, ValueError, KeyboardInterrupt) as recovery_error:
-                        print(f"ROLLBACK STOP: {recovery_error}", file=sys.stderr, flush=True)
+                        flow.show_error(recovery_error)
                 flow.recovery_notice()
                 return 1
     except (Stop, OSError, ValueError, KeyboardInterrupt, EOFError) as error:
-        print(f"STOP: {error}", file=sys.stderr, flush=True)
+        flow.record_error(error)
+        flow.show_error(error)
         flow.recovery_notice()
         return 1
     return 0

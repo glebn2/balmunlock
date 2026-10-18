@@ -1,4 +1,4 @@
-# Console-only portable build. No session files or local reports are collected.
+# Console-only balmunlock build. No session files or local reports are collected.
 from pathlib import Path
 import sys
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules, copy_metadata
@@ -17,7 +17,7 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts, [], exclude_binaries=True, name="unmuda", console=True,
+    pyz, a.scripts, [], exclude_binaries=True, name="balmunlock", console=True,
     debug=False, strip=False, upx=False, disable_windowed_traceback=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="unmuda")
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="balmunlock")

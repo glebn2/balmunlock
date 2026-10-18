@@ -19,7 +19,7 @@ from runtime_paths import VERSION
 def fetch(item, cache):
     path = cache / item["filename"]
     if not path.exists():
-        request = urllib.request.Request(item["url"], headers={"User-Agent": "unmuda-build"})
+        request = urllib.request.Request(item["url"], headers={"User-Agent": "balmunlock-build"})
         with urllib.request.urlopen(request, timeout=120) as response:
             data = response.read()
         if hashlib.sha256(data).hexdigest() != item["sha256"]:
@@ -40,7 +40,7 @@ def main():
     manifest = json.loads((ROOT / "build-support" / "downloads.json").read_text())
     platform_zip = fetch(manifest["platform_tools"], args.cache)
     sources = [fetch(item, args.cache) for item in manifest["sources"]]
-    output = ROOT / "dist" / f"unmuda-v{VERSION}-windows-x64"
+    output = ROOT / "dist" / f"balmunlock-v{VERSION}-windows-x64"
     if output.exists():
         raise FileExistsError(f"Refusing to reuse release directory: {output}")
     work = (ROOT / ".build" / "pyinstaller").resolve()
@@ -50,8 +50,8 @@ def main():
             raise ValueError(f"Build path outside intended directory: {target}")
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                     "--workpath", str(work), "--distpath", str(frozen),
-                    str(ROOT / "build-support" / "unmuda.spec")], cwd=ROOT, check=True)
-    shutil.copytree(frozen / "unmuda", output)
+                    str(ROOT / "build-support" / "balmunlock.spec")], cwd=ROOT, check=True)
+    shutil.copytree(frozen / "balmunlock", output)
     platform_files = ("adb.exe", "fastboot.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll",
                       "libwinpthread-1.dll", "NOTICE.txt", "source.properties")
     (output / "platform-tools").mkdir()
@@ -95,10 +95,10 @@ def main():
                 "dependencies": {name: importlib.metadata.version(name) for name in
                                  ("pyusb", "libusb-package", "importlib-resources", "pyinstaller")},
                 "downloads": manifest,
-                "source": "https://github.com/glebn2/unmuda"}
+                "source": "https://github.com/glebn2/balmunlock"}
     (output / "BUILD-INFO.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     (licenses / "SOURCES.txt").write_text(
-        "unmuda source: https://github.com/glebn2/unmuda (release tag or BUILD-INFO commit).\n"
+        "balmunlock source: https://github.com/glebn2/balmunlock (release tag or BUILD-INFO commit).\n"
         "libusb is a replaceable shared DLL under _internal/libusb_package; its corresponding\n"
         "source and wrapper build instructions are included in libusb-sources/.\n"
         "PyUSB: https://github.com/pyusb/pyusb/tree/v1.3.1\n"

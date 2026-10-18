@@ -3,7 +3,8 @@ import os
 from pathlib import Path
 import sys
 
-VERSION = "0.3.0"
+APP_NAME = "balmunlock"
+VERSION = "0.4.0"
 HELPERS = {
     "cve31317.py": "cve31317",
     "kdiag_shell.py": "kdiag_shell",

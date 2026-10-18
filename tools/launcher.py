@@ -2,7 +2,7 @@
 import runpy
 import sys
 
-from runtime_paths import HELPERS, VERSION, configure_runtime
+from runtime_paths import APP_NAME, HELPERS, VERSION, configure_runtime
 
 
 def main():
@@ -15,7 +15,7 @@ def main():
         print(f"STOP: {error}", file=sys.stderr)
         return 2
     if sys.argv[1:2] == ["--version"]:
-        print(f"unmuda {VERSION}")
+        print(f"{APP_NAME} {VERSION}")
         return 0
     if sys.argv[1:2] == ["--internal-tool"]:
         if len(sys.argv) < 3 or sys.argv[2] not in HELPERS:

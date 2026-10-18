@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -76,9 +77,10 @@ def main():
         finally:
             fs.close(fd)
         print("OK: LOOTBFCK записан и подтверждён.")
-        print("Далее: adb reboot bootloader -> fastboot flashing unlock ->")
-        print("выбрать разблокировку кнопками громкости и подтвердить по подсказке экрана "
-              "(на проверенном A101BM — кнопкой питания). См. README.md#usage.")
+        if os.environ.get("BALMUNLOCK_CONTROLLER") != "1":
+            print("Далее: adb reboot bootloader -> fastboot flashing unlock ->")
+            print("выбрать разблокировку кнопками громкости и подтвердить по подсказке экрана "
+                  "(на проверенном A101BM — кнопкой питания). См. README.md#usage.")
     finally:
         tr.close()
     return 0

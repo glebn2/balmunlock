@@ -176,7 +176,7 @@ class GuidedTests(WorkflowFixture):
         self.assertEqual(self.guide(["no"]), 1)
         self.assertFalse(self.host.calls)
         self.assertEqual(self.flow.backup.read_bytes(), ORIGINAL)
-        self.assertTrue((self.root / "unmuda-last-error.txt").exists())
+        self.assertTrue((self.root / "balmunlock-last-error.txt").exists())
 
     def test_unknown_saved_phase_cannot_be_resumed_as_preparation(self):
         self.prepared()

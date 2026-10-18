@@ -14,8 +14,11 @@ device-reports/
 .local-notes/
 .venv/
 .pytest_cache/
-.test-unmuda-*/
+.test-balmunlock-*/
 .build/
 dist/
+balmunlock-last-error.txt
 unmuda-last-error.txt
+balmunlock.log
+.test-unmuda-*/
 sessions/
