@@ -1,7 +1,8 @@
 """Owned cleanup receipt for the temporary Android settings used by cve31317.
 
 Modified 2026-10-17. No exploit, partition access or bootloader operations.
-Modified 2026-10-18: keep the receipt beside the packaged executable.
+The controller supplies its selected device's receipt path. Standalone helpers
+retain the legacy default beside the executable or source checkout.
 """
 from __future__ import annotations
 

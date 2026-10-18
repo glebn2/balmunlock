@@ -29,7 +29,7 @@ This is a CLI application. A portable Windows build is available through [GitHub
 
 The utility checks these parameters automatically. They limit admission to the procedure but do not guarantee compatibility: a manufacturer may have backported the fix. CVE-2024-31317 was fixed in the [June 2024 Android Security Bulletin](https://source.android.com/docs/security/bulletin/2024-06-01).
 
-Successful unlocking, restoration of the original `chkcode` and Android boot have been confirmed on A101BM, `1.280PO.0686.a`, SPL `2023-09-01`, Windows x64. On the same phone, the EXE was verified to refuse an already unlocked bootloader before writing the marker. A complete unlock using the packaged build, the modified Linux workflow and hardware failure rollback remain unverified by this fork. The original project reports support for X01A and other builds.
+Successful unlocking, restoration of the original `chkcode` and Android boot have been confirmed on A101BM, `1.280PO.0686.a`, SPL `2023-09-01`, Windows x64. On the same phone, the EXE was verified to refuse an already unlocked bootloader before writing the marker. A complete unlock using the packaged build, the modified Linux workflow and hardware failure rollback remain unverified by this fork. Normal USB (0482:0A74) and bootloader USB (18D1:D00D) were observed on X01A without unlocking it. X01A DIAG and unlocking remain unverified by this fork; the original project reports support for X01A and other builds.
 
 <a id="setup"></a>
 <a id="windows"></a>
@@ -37,13 +37,13 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 
 ### Installation
 
-1. Download `unmuda-v0.2.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/unmuda/releases).
+1. Download `unmuda-v0.3.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/unmuda/releases).
 2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `unmuda.exe`.
 3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
 
-To check the archive hash, run `Get-FileHash .\unmuda-v0.2.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
+To check the archive hash, run `Get-FileHash .\unmuda-v0.3.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
 
-Backups and receipts are stored beside the EXE regardless of PowerShell's current directory. Retain this directory until the procedure and any recovery have finished.
+Each phone gets a separate `sessions/device-.../` directory beside the EXE, regardless of PowerShell's current directory. It contains only that phone's backups and receipts; the selected path is printed. Retain the entire `sessions/` directory for recovery. Legacy 0.1/0.2 files beside the EXE are recognized and kept in place.
 
 <details>
 <summary>Running from source and building the EXE</summary>
@@ -72,7 +72,7 @@ The builder downloads pinned inputs with SHA-256 verification, checks the EXE wi
 
 ### Phone
 
-Enable developer options by tapping the build number in About phone. Enable **USB debugging** and **OEM unlocking**. Connect the phone, select file transfer, unlock the screen and authorize debugging from this computer. If the prompt appears while starting the utility, accept it; if the utility stops because authorization is missing, run it again.
+Enable developer options by tapping the build number in About phone. Enable **USB debugging** and **OEM unlocking**. Connect the phone, select file transfer, unlock the screen and authorize debugging from this computer. If the prompt appears while starting the utility, accept it; enter `yes` to check again in the same window.
 
 <a id="drivers"></a>
 ### Drivers
@@ -83,6 +83,8 @@ Install drivers using [Zadig](https://zadig.akeo.ie/) when each mode appears. Th
 | --- | --- | --- |
 | Fastboot | `18D1:D00D` | WinUSB with the `tools/balmuda-fastboot.cfg` preset |
 | DIAG | `0482:0A9D`, **Interface 0** | WinUSB |
+
+Windows may require binding the same preset again for another physical phone, even when VID/PID match. Follow the program's prompts for the attached phone.
 
 **Fastboot:** during the initial check, use Zadig **Device → Load Preset Device → `tools/balmuda-fastboot.cfg`**, select WinUSB and install the driver. The utility waits up to five minutes for the connection, then returns the phone to Android. The preset specifies the Android interface GUID required by fastboot.
 
@@ -113,7 +115,7 @@ A normal launch recognizes saved sessions and offers the appropriate continuatio
 .\unmuda.exe --recover --lang en
 ```
 
-Keep backups and receipts. Fastboot recovery does not require working PyUSB/libusb. If portable application files are damaged, restore them from the same release archive while preserving backups and receipts beside the EXE.
+Keep backups and receipts. Fastboot recovery does not require working PyUSB/libusb. If portable application files are damaged, restore them from the same release archive while preserving the entire `sessions/` directory and any legacy backups/receipts beside the EXE.
 
 <details>
 <summary>Additional Windows diagnostics and tests</summary>
@@ -212,7 +214,11 @@ python -m unittest discover -s tests -v
 <a id="recovery"></a>
 ## Backups and recovery
 
-An existing backup no longer makes a normal launch exit. The program validates saved files and explains the session:
+One installation supports any number of phones, one at a time. A normal launch lists ADB/fastboot devices and selects a session by serial. A new phone gets its own directory; a known phone resumes its own session. Another phone's completed or interrupted session does not block a new unlock, and its files are neither used nor changed.
+
+If no phone is detected, the program offers saved-session selection. For a new phone, connect it and relaunch. Leave only one phone connected. `--list-sessions` lists saved sessions without device access; `--session SERIAL_OR_KEY` selects an existing session without automatic discovery. `--session legacy` selects older files in the application directory. Selection itself never flashes or reboots the phone.
+
+After selection, the program validates saved files and explains the session:
 
 | State | Offered action |
 | --- | --- |
@@ -220,7 +226,7 @@ An existing backup no longer makes a normal launch exit. The program validates s
 | Interrupted after a possible marker write | Restore the original; no new unlock is started |
 | Original restored; reboot pending | Finish reboot only, without flashing again |
 | Rollback completed | If needed, check the phone and retry unlocking with the same originals |
-| Unlock already completed | Report completion without device access or repeat writes |
+| Unlock already completed | After selection, report completion without further phone operations or repeat writes |
 | Backups exist without a receipt | Rebuild a receipt only after two full live reads match the backup, without partition writes |
 | Receipt damaged, backups invalid or device mismatched | Explain the cause and retain files/error details; confirmation cannot override validation |
 
@@ -232,6 +238,7 @@ Backup creation reads all of `chkcode` twice and requires identical **524288 byt
 
 | Files | Purpose |
 | --- | --- |
+| `session.json` | Binds a new session directory to its device serial |
 | `chkcode_backup.bin` + `chkcode_backup.sha256` | Original partition and SHA-256 |
 | `chkcode_backup.recovery.bin` + `chkcode_backup.recovery.sha256` | Second verified copy |
 | `chkcode_backup.device.json` | Original device, hash and operation phase |
@@ -240,7 +247,7 @@ Backup creation reads all of `chkcode` twice and requires identical **524288 byt
 
 Originals are never deleted or overwritten. If one copy is damaged, the other is accepted only against the original receipt hash. Regenerating SHA cannot make a truncated file valid. Two copies on one drive do not protect against losing that drive; retain the complete set separately. Redact serial numbers and personal data before publishing logs.
 
-**Upgrading from 0.1.0:** extract the complete new archive. To continue an earlier session, copy all `chkcode_backup*` files and `cve_cleanup.device.json`, if present, into the new directory. Retain the old directory. The receipt version remains compatible; a normal launch offers the appropriate action. Use a separate clean directory for another phone.
+**Upgrading:** extract the complete new archive and retain the original directory. Copy legacy 0.1/0.2 session files (`chkcode_backup*` and `cve_cleanup.device.json`, if present) beside the new EXE. If a `sessions/` directory already exists, copy it intact as well. Older receipts remain compatible and are processed in place. Never merge different phones' files into one session directory. For the next phone, connect it and run the same EXE again.
 
 Ctrl+C and handled signals are deferred until the write and receipt update finish. Forced termination, power loss and physical USB disconnection cannot be repaired by the signal handler. Do not disconnect the cable during a write.
 
@@ -252,6 +259,8 @@ The normal launch runs the complete procedure. Additional modes serve specific t
 | Mode | Action |
 | --- | --- |
 | `--preflight` | Host dependencies only, without ADB/USB |
+| `--list-sessions` | List saved serials, phases and keys without ADB/USB |
+| `--session SERIAL_OR_KEY` | Select a saved session by serial or key; `legacy` selects older files in the application directory |
 | `--prepare` | DIAG and backups; no fastboot check, reboot, marker or unlock |
 | `--unlock-prepared` | Unlock from a saved `prepared` state without recreating backups |
 | `--recover` | Continue recovery of the original session |
@@ -300,6 +309,6 @@ Original project contributors:
 
 Upstream also credits Meta Red Team X, Google Android Security Team, JD Labs, agg23 and rabits for the discovery, fix, analysis and PoC of CVE-2024-31317.
 
-The suite contains 145 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH and Unicode paths. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
+The suite contains 175 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH, Unicode paths, two independent sessions and legacy receipts. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
 
 The [GNU GPL v3](LICENSE) license is retained from upstream. The utility is provided without warranties; see LICENSE for the complete terms.

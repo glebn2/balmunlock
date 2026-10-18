@@ -21,6 +21,7 @@ from cve_cleanup import STATE_NAME, CleanupError, cleanup_pending, load_state as
 from device_policy import validate_identity
 from operation_signals import OperationSignals
 from session_lock import session_lock
+from session_store import SessionStore, valid_serial
 from runtime_paths import VERSION, frozen, session_root, tool_command
 
 ROOT = session_root()
@@ -79,9 +80,11 @@ class Workflow:
         self.lang = lang
         self.interactive = interactive
         self.serial = None
-        self.backup = ROOT / "chkcode_backup.bin"
-        self.recovery_backup = ROOT / "chkcode_backup.recovery.bin"
-        self.receipt = ROOT / "chkcode_backup.device.json"
+        self.root = ROOT
+        self.session_serial = None
+        self.backup = self.root / "chkcode_backup.bin"
+        self.recovery_backup = self.root / "chkcode_backup.recovery.bin"
+        self.receipt = self.root / "chkcode_backup.device.json"
         self.marker_possible = False
         self.marker_verified = False
         self.original = None
@@ -108,9 +111,123 @@ class Workflow:
     def retry(self, ru, en):
         return self.interactive and self.ask(ru, en)
 
+    def bind_session(self, session):
+        if session.error:
+            raise Stop(f"Saved session is invalid: {session.root}. {session.error}. Files retained.")
+        if self.initial_serial and session.serial and self.initial_serial != session.serial:
+            raise Stop("Selected session conflicts with ANDROID_SERIAL; no device command sent")
+        self.root = session.root
+        self.session_serial = session.serial
+        self.serial = session.serial
+        self.backup = self.root / "chkcode_backup.bin"
+        self.recovery_backup = self.root / "chkcode_backup.recovery.bin"
+        self.receipt = self.root / "chkcode_backup.device.json"
+        if session.serial:
+            self.env["ANDROID_SERIAL"] = session.serial
+        self.say(f"Выбран сеанс телефона {session.serial or 'с неустановленным серийным номером'}: {self.root}",
+                 f"Selected device session {session.serial or '(unknown serial)'}: {self.root}")
+
+    def choose_session(self, entries):
+        self.say("Сохранённые сеансы (файлы не перемещаются и не удаляются):",
+                 "Saved sessions (files are not moved or deleted):")
+        for index, entry in enumerate(entries, 1):
+            print(f"  {index}. {entry.serial or '?'} | {entry.phase} | {entry.key}", flush=True)
+        if not self.interactive:
+            raise Stop("Select a saved session with --session SERIAL_OR_KEY; see --list-sessions")
+        self.say("Введите номер нужного сеанса или нажмите Enter для выхода. "
+                 "Если нужен новый телефон, подключите его и заново запустите программу.",
+                 "Enter a session number, or press Enter to stop. "
+                 "For a new phone, connect it and relaunch the program.")
+        while True:
+            answer = input().strip()
+            if answer.lower() in ("", "no", "n", "нет"):
+                raise Declined("Session selection cancelled")
+            if answer.isascii() and answer.isdigit() and 1 <= int(answer) <= len(entries):
+                return entries[int(answer) - 1]
+            self.say("Введите номер из списка или нажмите Enter.",
+                     "Enter a number from the list, or press Enter.")
+
+    def connected_devices(self):
+        """Read-only transport discovery; no reboot, shell command or DIAG activation."""
+        found = {}
+        for program in ("adb", "fastboot"):
+            try:
+                result = self.run([program, "devices"], timeout=10, check=False)
+            except Stop:
+                continue
+            if result.returncode:
+                continue
+            for row in devices(result.stdout):
+                if len(row) != 2 or not valid_serial(row[0]):
+                    continue
+                if (program == "adb" and row[1] in ("device", "unauthorized", "offline", "recovery", "sideload")) or (
+                        program == "fastboot" and row[1] == "fastboot"):
+                    found.setdefault(row[0], set()).add(program)
+        return found
+
+    def route_session(self, args):
+        store = SessionStore(ROOT)
+        if args.session:
+            self.bind_session(store.select(args.session))
+            return True
+        while True:
+            entries = store.entries()
+            found = self.connected_devices()
+            if len(found) > 1:
+                if self.retry("Подключено несколько телефонов. Оставьте один и введите yes для выбора его сеанса.",
+                              "Several phones are connected. Leave one and enter yes to select its session."):
+                    continue
+                raise Stop("Connect one phone at a time; no session selected")
+            if found:
+                serial = next(iter(found))
+                if self.initial_serial and serial != self.initial_serial:
+                    if self.retry("Подключён другой телефон, чем указан в ANDROID_SERIAL. Подключите нужный. Проверить снова?",
+                                  "The attached phone differs from ANDROID_SERIAL. Connect the expected phone. Check again?"):
+                        continue
+                    raise Stop("ANDROID_SERIAL differs from the connected phone; no session selected")
+                matching = [entry for entry in entries if entry.serial == serial]
+                if len(matching) > 1:
+                    session = self.choose_session(matching)
+                elif matching:
+                    session = matching[0]
+                elif args.recover:
+                    self.say("Для подключённого телефона нет сохранённого сеанса восстановления. "
+                             "Новые бэкапы и анлок не запускаются.",
+                             "No recovery session exists for the attached phone. No new backup or unlock is started.")
+                    if entries:
+                        self.bind_session(self.choose_session(entries))
+                        return True
+                    return False
+                elif found[serial] == {"fastboot"}:
+                    raise Stop("Phone is in fastboot without a matching saved session. "
+                               "Use its original backup folder or --session legacy if old backups have no receipt. "
+                               "For a first unlock, return the unmodified phone to Android first.")
+                else:
+                    self.say("Новый серийный номер: будет создан отдельный сеанс. Бэкапы других телефонов сохраняются.",
+                             "New serial: creating a separate session. Other phones' backups are retained.")
+                    session = store.create(serial)
+                self.bind_session(session)
+                return True
+            if entries:
+                self.say("Телефон пока не обнаружен. Можно выбрать сохранённый сеанс для продолжения "
+                         "или подключить новый телефон и перезапустить программу.",
+                         "No phone detected. Select a saved session to continue, or connect a new phone and relaunch.")
+                session = self.choose_session(entries) if self.interactive or len(entries) > 1 else entries[0]
+                self.bind_session(session)
+                return True
+            if args.recover:
+                self.say("Сохранённых сеансов нет. Восстанавливать нечего.",
+                         "No saved sessions exist. Nothing needs recovery.")
+                return False
+            self.say("Подключите один телефон с включённой отладкой по USB. Ожидаю подключение...",
+                     "Connect one phone with USB debugging enabled. Waiting for connection...")
+            self.select_adb()
+            self.bind_session(store.create(self.serial))
+            return True
+
     def run(self, args, timeout=15, check=True):
         try:
-            result = subprocess.run([str(arg) for arg in args], cwd=ROOT,
+            result = subprocess.run([str(arg) for arg in args], cwd=self.root,
                                     env=self.env, capture_output=True, text=True,
                                     encoding="utf-8", errors="replace", timeout=timeout,
                                     **self.signals.child_options())
@@ -123,6 +240,8 @@ class Workflow:
         return result
 
     def tool(self, name, *args, check=True):
+        if name == "cve31317.py" and self.root != ROOT:
+            args = (*args, "--state", str(self.root / STATE_NAME))
         # Never kill a partition-writing process on a host-side timer.
         timeout = None if name in ("unlock_chkcode.py", "restore_chkcode.py") else 600
         if name == "diag_probe.py":
@@ -157,7 +276,7 @@ class Workflow:
     def cleanup_cve(self):
         with self.signals.defer():
             try:
-                cleaned = cleanup_pending(ROOT / STATE_NAME, expected_serial=self.serial,
+                cleaned = cleanup_pending(self.root / STATE_NAME, expected_serial=self.serial,
                                           child_options=self.signals.child_options())
             except CleanupError as error:
                 raise Stop(str(error)) from error
@@ -292,6 +411,8 @@ class Workflow:
             raise Stop("Invalid recovery image hash.")
         if "reboot_pending" in state and not isinstance(state["reboot_pending"], bool):
             raise Stop("Invalid saved reboot state. Keep the original receipt.")
+        if self.session_serial is not None and serial != self.session_serial:
+            raise Stop("Recovery receipt belongs to a different session directory; no commands sent")
         self.state = state
         self.serial = serial
         self.env["ANDROID_SERIAL"] = serial
@@ -526,7 +647,7 @@ class Workflow:
         require_new_backup(self.recovery_backup)
         if self.receipt.exists():
             raise Stop(f"Previous device receipt exists: {self.receipt}. See README.md#recovery.")
-        if (ROOT / STATE_NAME).exists():
+        if (self.root / STATE_NAME).exists():
             raise Stop("CVE cleanup is pending. Use --recover before starting a new session.")
         self.say("Ожидаю единственное авторизованное ADB-устройство...",
                  "Waiting for exactly one authorized ADB device...")
@@ -568,7 +689,7 @@ class Workflow:
         if (self.state.get("phase") not in allowed or self.marker_possible or
                 (self.marker_verified and not restart_recovered) or self.state.get("reboot_pending")):
             raise Stop("Not a clean prepared session. Use recovery for a started unlock.")
-        if (ROOT / STATE_NAME).exists():
+        if (self.root / STATE_NAME).exists():
             raise Stop("CVE cleanup is pending. Finish cleanup before unlocking.")
         self.select_adb()
         for key in ("ro.product.model", "ro.build.version.incremental",
@@ -649,7 +770,7 @@ class Workflow:
               f"\nReceipt: {self.receipt}", flush=True)
 
     def record_error(self, error):
-        path = ROOT / "unmuda-last-error.txt"
+        path = self.root / "unmuda-last-error.txt"
         try:
             path.write_text(f"Phase: {self.state.get('phase', 'before backup')}\n"
                             f"Serial: {self.serial or 'not selected'}\n{type(error).__name__}: {error}\n",
@@ -722,14 +843,14 @@ class Workflow:
 
     def guided(self, args):
         print(f"unmuda {VERSION}", flush=True)
-        self.say(f"Рабочая папка: {ROOT}", f"Session directory: {ROOT}")
+        self.say(f"Папка сеанса: {self.root}", f"Session directory: {self.root}")
         terminal = {"reboot_submitted", "rollback_reboot_submitted", "rollback_diag_verified",
                     "recovery_android_online", "recovery_reboot_submitted", "already_unlocked"}
         while True:
             try:
-                if (ROOT / STATE_NAME).exists():
+                if (self.root / STATE_NAME).exists():
                     try:
-                        cleanup_state = load_cleanup_state(ROOT / STATE_NAME)
+                        cleanup_state = load_cleanup_state(self.root / STATE_NAME)
                     except CleanupError as error:
                         raise Stop(f"Cleanup receipt is invalid. Retain it and the error log: {error}") from error
                     self.say(f"Ожидает очистки телефон: {cleanup_state['serial']}. Подключите именно его.",
@@ -770,9 +891,10 @@ class Workflow:
                                 self.resume_prepared(restart_recovered=True)
                                 return 0
                         self.say("Этот сеанс уже завершён; повторная запись не нужна. Проверьте загрузку Android. "
-                                 "Сохраните эту папку с бэкапами. Для другого телефона используйте отдельную распакованную папку.",
+                                 "Сохраните эту папку с бэкапами. Для другого телефона подключите его и снова запустите программу: "
+                                 "будет выбран его отдельный сеанс.",
                                  "This session is already finished; no repeat write is needed. Check Android boot and "
-                                 "retain this backup folder. Use a separate extracted directory for another phone.")
+                                 "retain this backup folder. Connect another phone and relaunch to select its separate session.")
                         return 0
                     if phase not in ("prepared", "backup_ready") or self.marker_verified:
                         raise Stop("Unrecognized saved phase. Keep the folder, receipt and both backups; "
@@ -844,7 +966,7 @@ class Workflow:
                 if not self.ask("После исправления повторить проверку сохранённого состояния в этом окне?",
                                 "After fixing the cause, recheck the saved state in this window?"):
                     return 1
-                if not self.receipt.exists() and not (ROOT / STATE_NAME).exists():
+                if not self.receipt.exists() and not (self.root / STATE_NAME).exists() and not self.session_serial:
                     self.serial = None
                     if self.initial_serial is None:
                         self.env.pop("ANDROID_SERIAL", None)
@@ -871,25 +993,44 @@ def main():
     interaction = parser.add_mutually_exclusive_group()
     interaction.add_argument("--guided", action="store_true", help="enable guided prompts, also with redirected stdin")
     interaction.add_argument("--non-interactive", action="store_true", help="stop on errors instead of offering guided retries")
+    parser.add_argument("--session", metavar="SERIAL_OR_KEY", help="select an existing device session without automatic discovery")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preflight", action="store_true", help="host checks only; no ADB/USB")
     mode.add_argument("--recover", action="store_true", help="resume chkcode recovery from the saved device receipt")
     mode.add_argument("--prepare", action="store_true", help="activate DIAG and back up chkcode; stop before marker/unlock")
     mode.add_argument("--unlock-prepared", action="store_true", help="START UNLOCK using the checked prepared session; erases user data")
+    mode.add_argument("--list-sessions", action="store_true", help="list saved device sessions without ADB/USB access")
     args = parser.parse_args()
     if args.preflight:
         return 0 if preflight(args.lang) else 1
+    if args.list_sessions:
+        try:
+            entries = SessionStore(ROOT).entries()
+            if not entries:
+                print("Сохранённых сеансов нет." if args.lang == "ru" else "No saved sessions.")
+            for entry in entries:
+                print(f"{entry.serial or '?'} | {entry.phase} | {entry.key}\n  {entry.root}")
+                if entry.error:
+                    print(f"  ERROR: {entry.error}")
+            return 0
+        except (OSError, ValueError) as error:
+            print(f"STOP: {error}", file=sys.stderr)
+            return 1
     flow = Workflow(args.lang, interactive=not args.non_interactive and (args.guided or sys.stdin.isatty()))
     if flow.interactive:
         try:
             with session_lock(ROOT / ".unlock.lock"), flow.signals:
+                if not flow.route_session(args):
+                    return 0
                 return flow.guided(args)
+        except (Declined, EOFError):
+            return 0
         except (Stop, OSError, ValueError, KeyboardInterrupt, EOFError) as error:
             flow.record_error(error)
-            flow.say("Продолжить сейчас нельзя. Закройте другой запущенный экземпляр, проверьте право записи "
-                     "в эту папку и сохраните бэкапы. После устранения причины снова запустите программу из той же папки.",
-                     "Cannot continue now. Close any other running instance, check write access to this directory "
-                     "and retain the backups. Fix the cause and relaunch from the same folder.")
+            flow.say("Не удалось выбрать или открыть сеанс. Причина указана ниже. Сохраните бэкапы; "
+                     "проверьте список через --list-sessions. После устранения причины повторите запуск.",
+                     "Cannot select or open the session. See the reason below and retain the backups. "
+                     "Use --list-sessions to inspect saved sessions, fix the cause and relaunch.")
             print(f"Details: {error}", file=sys.stderr, flush=True)
             flow.recovery_notice()
             return 1
@@ -906,6 +1047,8 @@ def main():
         if input().strip().lower() != "yes":
             return 0
         with session_lock(ROOT / ".unlock.lock"), flow.signals:
+            if not flow.route_session(args):
+                return 0
             if args.recover:
                 # Fastboot recovery must remain usable without pyusb/ADB.
                 cleaned = flow.cleanup_cve()

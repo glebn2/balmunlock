@@ -218,8 +218,23 @@ class CleanupTests(unittest.TestCase):
     def test_workflow_recover_handles_cleanup_only_session_without_partition_backup(self):
         self.pending()
         self.adb.hidden, self.adb.usap, self.adb.payload = "*", "false", True
-        with patch.object(sys, "argv", ["unlock", "--recover"]), patch("builtins.input", return_value="yes"):
+        with patch.object(sys, "argv", ["unlock", "--recover", "--session", "legacy"]), patch("builtins.input", return_value="yes"):
             self.assertEqual(unlock.main(), 0)
         self.assertFalse(self.state.exists())
         self.assertFalse((self.root / "chkcode_backup.bin").exists())
         self.assertFalse(self.adb.payload)
+
+    def test_explicit_session_state_and_payload_do_not_use_legacy_directory(self):
+        directory = self.root / "selected-session"
+        directory.mkdir()
+        state = directory / cleanup.STATE_NAME
+        self.pending()
+        legacy = self.state.read_bytes()
+        factory = lambda exe, path: cleanup.InjectionCleanup(exe, path)
+        with patch.object(cve, "InjectionCleanup", factory), \
+                patch.object(sys, "argv", ["cve", "--state", str(state)]):
+            self.assertEqual(cve.main(), 0)
+        self.assertFalse(state.exists())
+        self.assertEqual(self.state.read_bytes(), legacy)
+        self.assertTrue((directory / "p31317.txt").exists())
+        self.assertFalse((self.root / "p31317.txt").exists())

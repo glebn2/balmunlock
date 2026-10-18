@@ -226,6 +226,7 @@ class FakeHost:
 
 class WorkflowFixture(unittest.TestCase):
     isolate_bootloader_check = True
+    isolate_session_routing = True
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix=".test-unmuda-", dir=TOOLS.parent)
@@ -243,6 +244,9 @@ class WorkflowFixture(unittest.TestCase):
         if self.isolate_bootloader_check:
             # Existing write/recovery scenarios begin after driver setup.
             self.enter(patch.object(unlock.Workflow, "check_bootloader", autospec=True))
+        if self.isolate_session_routing:
+            # Low-level regression scenarios supply their existing session directly.
+            self.enter(patch.object(unlock.Workflow, "route_session", return_value=True))
         self.flow = unlock.Workflow()
 
     def enter(self, manager):

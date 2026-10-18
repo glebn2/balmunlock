@@ -63,8 +63,8 @@ def main():
         run(exe, "--internal-tool", "chkcode_backup.py", image)
         image.write_bytes(b"truncated")
         run(exe, "--internal-tool", "unlock_chkcode.py", "--backup", image, "--yes", expected=2)
-        run(exe, input="no\n")
-        run(exe, "--guided", input="no\n")
+        run(exe, "--list-sessions", input="")
+        run(exe, "--guided", "--session", "legacy", input="", expected=1)
         assert "Android Debug Bridge" in run(app / "platform-tools" / "adb.exe", "version")
         assert "fastboot version" in run(app / "platform-tools" / "fastboot.exe", "--version")
         assert not list(app.glob("chkcode_backup*")) and not (app / "cve_cleanup.device.json").exists()
@@ -81,14 +81,29 @@ def main():
                  "sha256": digest, "ro.product.model": "A101BM", "ro.build.version.sdk": "31",
                  "ro.build.version.incremental": "1.280PO.0686.a", "ro.build.version.security_patch": "2023-09-01"}
         receipt.write_text(json.dumps(state), encoding="utf-8")
-        assert "already finished" in run(exe, "--guided", "--lang", "en", input="")
+        assert "already finished" in run(exe, "--guided", "--session", "legacy", "--lang", "en", input="")
         state.update(phase="prepared", marker_verified=False)
         receipt.write_text(json.dumps(state), encoding="utf-8")
-        assert "saved preparation" in run(exe, "--guided", "--lang", "en", input="no\n")
+        assert "saved preparation" in run(exe, "--guided", "--session", "legacy", "--lang", "en", input="no\n")
         receipt.write_text("corrupted receipt", encoding="utf-8")
-        run(exe, "--guided", "--lang", "en", input="no\n", expected=1)
+        run(exe, "--guided", "--session", "legacy", "--lang", "en", input="no\n", expected=1)
         assert receipt.read_text() == "corrupted receipt"
         assert (app / "chkcode_backup.bin").read_bytes() == original
+        # Two device sessions coexist in one real portable directory. Explicit
+        # selection exercises routing without querying attached phones.
+        from session_store import SessionStore
+        store = SessionStore(app)
+        for serial in ("FIRST_TEST", "SECOND_TEST"):
+            session = store.create(serial)
+            for name in ("chkcode_backup.bin", "chkcode_backup.recovery.bin"):
+                path = session.root / name
+                path.write_bytes(original)
+                path.with_suffix(".sha256").write_text(f"{digest}  {name}\n", encoding="ascii")
+            state.update(serial=serial, phase="reboot_submitted", marker_verified=True)
+            (session.root / "chkcode_backup.device.json").write_text(json.dumps(state), encoding="utf-8")
+            assert "already finished" in run(exe, "--guided", "--session", serial, "--lang", "en", input="")
+        listing = run(exe, "--list-sessions", "--lang", "en")
+        assert "FIRST_TEST" in listing and "SECOND_TEST" in listing and "legacy" in listing
         print("Frozen smoke checks passed: isolated PATH, Unicode paths, helpers, libusb and no device operations.")
 
 

