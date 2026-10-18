@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import sys
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 HELPERS = {
     "cve31317.py": "cve31317",
     "kdiag_shell.py": "kdiag_shell",
@@ -11,6 +11,8 @@ HELPERS = {
     "unlock_chkcode.py": "unlock_chkcode",
     "restore_chkcode.py": "restore_chkcode",
     "chkcode_backup.py": "chkcode_backup",
+    "diag_probe.py": "diag_probe",
+    "verify_chkcode.py": "verify_chkcode",
 }
 _DLL_HANDLES = []
 

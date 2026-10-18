@@ -238,6 +238,8 @@ class WorkflowFixture(unittest.TestCase):
         self.enter(patch.object(unlock.time, "sleep", self.host.sleep))
         self.enter(patch.object(unlock.time, "monotonic", lambda: self.host.now))
         self.enter(patch.dict(os.environ, {}, clear=True))
+        # These regression cases exercise the strict CLI; guided flows have separate tests.
+        self.enter(patch.object(unlock.sys.stdin, "isatty", return_value=False))
         if self.isolate_bootloader_check:
             # Existing write/recovery scenarios begin after driver setup.
             self.enter(patch.object(unlock.Workflow, "check_bootloader", autospec=True))

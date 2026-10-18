@@ -1,6 +1,7 @@
 """Check the frozen app without connecting to ADB, fastboot devices or USB."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -38,12 +39,13 @@ def main():
                 raise AssertionError(f"{command}: exit={result.returncode}\n{result.stdout}\n{result.stderr}")
             return result.stdout + result.stderr
 
-        assert "unmuda 0.1.0" in run(exe, "--version")
+        from runtime_paths import VERSION
+        assert f"unmuda {VERSION}" in run(exe, "--version")
         assert "--recover" in run(exe, "--help")
         preflight = run(exe, "--preflight", "--lang", "en")
         assert "libusb: available" in preflight and str(app / "platform-tools") in preflight, preflight
         for helper in ("cve31317.py", "kdiag_shell.py", "backup_chkcode.py", "unlock_chkcode.py",
-                       "restore_chkcode.py", "chkcode_backup.py"):
+                       "restore_chkcode.py", "chkcode_backup.py", "diag_probe.py", "verify_chkcode.py"):
             run(exe, "--internal-tool", helper, "--help")
         run(exe, "--internal-tool", "unknown.py", expected=2)
         assert "printf" in run(exe, "--internal-tool", "cve31317.py", "--encode", "diag,modem,adb")
@@ -62,9 +64,31 @@ def main():
         image.write_bytes(b"truncated")
         run(exe, "--internal-tool", "unlock_chkcode.py", "--backup", image, "--yes", expected=2)
         run(exe, input="no\n")
+        run(exe, "--guided", input="no\n")
         assert "Android Debug Bridge" in run(app / "platform-tools" / "adb.exe", "version")
         assert "fastboot version" in run(app / "platform-tools" / "fastboot.exe", "--version")
         assert not list(app.glob("chkcode_backup*")) and not (app / "cve_cleanup.device.json").exists()
+        # Saved v1 receipts are checked before device discovery, even in the real EXE.
+        original = bytes(524288)
+        digest = hashlib.sha256(original).hexdigest()
+        for name in ("chkcode_backup.bin", "chkcode_backup.recovery.bin"):
+            path = app / name
+            path.write_bytes(original)
+            path.with_suffix(".sha256").write_text(f"{digest}  {name}\n", encoding="ascii")
+        receipt = app / "chkcode_backup.device.json"
+        state = {"version": 1, "serial": "OFFLINE_TEST", "phase": "reboot_submitted",
+                 "marker_possible": False, "marker_verified": True, "reboot_pending": False,
+                 "sha256": digest, "ro.product.model": "A101BM", "ro.build.version.sdk": "31",
+                 "ro.build.version.incremental": "1.280PO.0686.a", "ro.build.version.security_patch": "2023-09-01"}
+        receipt.write_text(json.dumps(state), encoding="utf-8")
+        assert "already finished" in run(exe, "--guided", "--lang", "en", input="")
+        state.update(phase="prepared", marker_verified=False)
+        receipt.write_text(json.dumps(state), encoding="utf-8")
+        assert "saved preparation" in run(exe, "--guided", "--lang", "en", input="no\n")
+        receipt.write_text("corrupted receipt", encoding="utf-8")
+        run(exe, "--guided", "--lang", "en", input="no\n", expected=1)
+        assert receipt.read_text() == "corrupted receipt"
+        assert (app / "chkcode_backup.bin").read_bytes() == original
         print("Frozen smoke checks passed: isolated PATH, Unicode paths, helpers, libusb and no device operations.")
 
 

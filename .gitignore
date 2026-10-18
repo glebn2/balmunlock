@@ -17,3 +17,4 @@ device-reports/
 .test-unmuda-*/
 .build/
 dist/
+unmuda-last-error.txt

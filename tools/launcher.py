@@ -9,6 +9,9 @@ def main():
     try:
         configure_runtime()
     except (OSError, RuntimeError) as error:
+        if "en" not in sys.argv:
+            print("Не удалось загрузить файлы программы. Распакуйте весь релизный ZIP в доступную папку, "
+                  "сохранив _internal, platform-tools и tools рядом с EXE. Бэкапы и журналы не удаляйте.", file=sys.stderr)
         print(f"STOP: {error}", file=sys.stderr)
         return 2
     if sys.argv[1:2] == ["--version"]:

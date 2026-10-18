@@ -37,11 +37,11 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 
 ### Installation
 
-1. Download `unmuda-v0.1.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/unmuda/releases).
+1. Download `unmuda-v0.2.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/unmuda/releases).
 2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `unmuda.exe`.
 3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
 
-To check the archive hash, run `Get-FileHash .\unmuda-v0.1.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
+To check the archive hash, run `Get-FileHash .\unmuda-v0.2.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
 
 Backups and receipts are stored beside the EXE regardless of PowerShell's current directory. Retain this directory until the procedure and any recovery have finished.
 
@@ -86,9 +86,9 @@ Install drivers using [Zadig](https://zadig.akeo.ie/) when each mode appears. Th
 
 **Fastboot:** during the initial check, use Zadig **Device → Load Preset Device → `tools/balmuda-fastboot.cfg`**, select WinUSB and install the driver. The utility waits up to five minutes for the connection, then returns the phone to Android. The preset specifies the Android interface GUID required by fastboot.
 
-If fastboot remains unavailable after installation, bind the Zadig-generated `Android_Bootloader_Interface.inf` to `18D1:D00D` in Device Manager: Update driver → Browse my computer → Let me pick → Have Disk. See the [Zadig guide](https://github.com/pbatard/libwdi/wiki/Zadig#example-of-a-zadig-preset-device-config-file) and [USB driver installation](https://developer.android.com/studio/run/oem-usb). If the wait expires before the marker is written, return the phone to Android using its power button and rerun after configuring the driver.
+If fastboot remains unavailable after installation, bind the Zadig-generated `Android_Bootloader_Interface.inf` to `18D1:D00D` in Device Manager: Update driver → Browse my computer → Let me pick → Have Disk. See the [Zadig guide](https://github.com/pbatard/libwdi/wiki/Zadig#example-of-a-zadig-preset-device-config-file) and [USB driver installation](https://developer.android.com/studio/run/oem-usb). If the wait expires, the program offers another check in the same window: finish installing the driver and enter `yes`. Keep the phone in the bootloader; no application restart is needed.
 
-**DIAG:** once `0482:0A9D` appears, enable **Options → List All Devices**, select **Interface 0** and install WinUSB. If the utility stopped because this driver was missing before backups were created, install it and repeat the normal launch. If it reports an existing session, use [recovery](#recovery).
+**DIAG:** the program first checks the connection without partition writes. If the driver is missing, it stays open and shows the steps: Zadig → **Options → List All Devices** → **0482:0A9D, Interface 0** → **WinUSB**. After installation enter `yes` in the same window. Only the connection check is retried; unlocking continues after it succeeds.
 
 <a id="usage"></a>
 ### Unlocking
@@ -99,7 +99,7 @@ Open PowerShell in the directory extracted from the ZIP, then run:
 .\unmuda.exe --lang en
 ```
 
-Enter `yes` and follow the messages. Manual ADB/fastboot commands and serial entry are unnecessary. The utility checks the phone and fastboot before writing the marker, creates backups and starts unlocking.
+A normal terminal enables guided prompts. Enter `yes` when ready for the proposed action. If ADB is unauthorized, accept the phone prompt and enter `yes` to check again in the same window. Manual ADB/fastboot commands and serial entry are unnecessary. The utility checks the phone and fastboot before writing the marker, creates backups and starts unlocking.
 
 On the phone, select **Unlock the bootloader** with the volume buttons and confirm as instructed on screen. On the tested A101BM, the power button confirms the choice. Stay nearby: unlocking cannot finish without this action.
 
@@ -107,7 +107,7 @@ After confirmation, the utility waits for a verified `unlocked` state, restores 
 
 ### Continuing recovery
 
-If automatic rollback did not finish, restore the USB connection and run:
+A normal launch recognizes saved sessions and offers the appropriate continuation. If automatic rollback is unfinished, fix the connection/driver and confirm another recovery attempt in the same window. After closing the program, launch normally or explicitly select recovery:
 
 ```powershell
 .\unmuda.exe --recover --lang en
@@ -212,25 +212,37 @@ python -m unittest discover -s tests -v
 <a id="recovery"></a>
 ## Backups and recovery
 
-The utility reads the entire `chkcode` twice, requires identical data of exactly **524288 bytes**, rejects an original containing the service marker and saves:
+An existing backup no longer makes a normal launch exit. The program validates saved files and explains the session:
+
+| State | Offered action |
+| --- | --- |
+| Preparation saved; marker not written | Continue unlocking with the original backups after checking the phone and confirming data erasure |
+| Interrupted after a possible marker write | Restore the original; no new unlock is started |
+| Original restored; reboot pending | Finish reboot only, without flashing again |
+| Rollback completed | If needed, check the phone and retry unlocking with the same originals |
+| Unlock already completed | Report completion without device access or repeat writes |
+| Backups exist without a receipt | Rebuild a receipt only after two full live reads match the backup, without partition writes |
+| Receipt damaged, backups invalid or device mismatched | Explain the cause and retain files/error details; confirmation cannot override validation |
+
+Recovery is limited by available transport. A failure after a possible marker write starts one bounded automatic rollback attempt, waiting up to 120 seconds for the same phone. Another attempt requires a separate `yes`. Unknown bootloader mode/lock state does not permit flashing.
+
+Android/DIAG restores the original eight-byte prefix with full-partition verification; fastboot flashes the verified original image. A locked device additionally requires a verified service marker in the receipt. This hardware failure branch has not been tested by this fork. If only reboot remains, the image is not flashed again.
+
+Backup creation reads all of `chkcode` twice and requires identical **524288 bytes**, a valid SHA-256 and no service marker in the original:
 
 | Files | Purpose |
 | --- | --- |
 | `chkcode_backup.bin` + `chkcode_backup.sha256` | Original partition and SHA-256 |
 | `chkcode_backup.recovery.bin` + `chkcode_backup.recovery.sha256` | Second verified copy |
 | `chkcode_backup.device.json` | Original device, hash and operation phase |
+| `cve_cleanup.device.json`, if retained | Restore temporary Android settings and remove the payload on the original phone |
+| `unmuda-last-error.txt`, if created | Last error details for diagnosis |
 
-Existing copies are never overwritten. Retain the complete set; two copies on one drive do not protect against losing that drive. An all-zero stock `chkcode` is acceptable, but recovery uses the actual original dump rather than a newly generated zero-filled image.
+Originals are never deleted or overwritten. If one copy is damaged, the other is accepted only against the original receipt hash. Regenerating SHA cannot make a truncated file valid. Two copies on one drive do not protect against losing that drive; retain the complete set separately. Redact serial numbers and personal data before publishing logs.
 
-A failure after a possible marker write triggers bounded automatic rollback, waiting up to 120 seconds for the same phone. Accessible Android/DIAG allows restoration of the original eight bytes with full-partition verification; fastboot restores the verified original image. A locked bootloader requires a verified service marker in the receipt. This failure branch is based on upstream research and has not been hardware-tested by this fork.
+**Upgrading from 0.1.0:** extract the complete new archive. To continue an earlier session, copy all `chkcode_backup*` files and `cve_cleanup.device.json`, if present, into the new directory. Retain the old directory. The receipt version remains compatible; a normal launch offers the appropriate action. Use a separate clean directory for another phone.
 
-Unknown lock state does not permit flashing. Failed flashes are not retried indefinitely or followed by an automatic reboot. If flashing completed but the reboot reply was lost, only reboot completion is retried.
-
-Incomplete rollback retains `recovery_pending`; use the `--recover` command in your OS section. It does not start another unlock or restore erased user data. If `cve_cleanup.device.json` remains, recovery first restores the original phone's temporary hidden API/USAP settings and removes the payload; this can also run before a partition backup exists.
-
-If one copy is damaged, the second is accepted only against the original receipt hash. A truncated dump, lost receipt or hash mismatch requires investigation; recreating a SHA file does not repair a backup. Do not delete session artifacts to enable a rerun.
-
-Ctrl+C and handled signals are deferred until the write and receipt update finish. Forced process termination, power loss and physical USB disconnection cannot be repaired by the signal handler. Do not disconnect the cable during a write.
+Ctrl+C and handled signals are deferred until the write and receipt update finish. Forced termination, power loss and physical USB disconnection cannot be repaired by the signal handler. Do not disconnect the cable during a write.
 
 <a id="diagnostics"></a>
 ## Additional modes and diagnostics
@@ -243,9 +255,11 @@ The normal launch runs the complete procedure. Additional modes serve specific t
 | `--prepare` | DIAG and backups; no fastboot check, reboot, marker or unlock |
 | `--unlock-prepared` | Unlock from a saved `prepared` state without recreating backups |
 | `--recover` | Continue recovery of the original session |
+| `--guided` | Force guided prompts, including with redirected input |
+| `--non-interactive` | Stop on errors without offering retries |
 | `--lang ru` / `--lang en` | Controller language; some low-level messages remain Russian |
 
-The split `--prepare` / `--unlock-prepared` modes are unnecessary for a normal launch. They assume fastboot is already configured; rebooting a prepared phone may require separately re-enabling DIAG/the service.
+The split `--prepare` / `--unlock-prepared` modes are unnecessary for a normal launch. Guided continuation reuses existing backups, re-enables DIAG/the service when needed and compares the live partition with the original before the preliminary reboot.
 
 | Message | Action |
 | --- | --- |
@@ -253,7 +267,7 @@ The split `--prepare` / `--unlock-prepared` modes are unnecessary for a normal l
 | Fastboot missing during the initial check | Configure the driver/USB permissions; the marker has not been written |
 | DIAG `no langid` / Access denied | Check DIAG WinUSB and exclude concurrent ADB polling |
 | `fs_sys_call_diag` not `running` / DIAG_BAD_CMD | Check service startup; an empty `sysprop` has a separate alternative command in each OS section |
-| Backup or receipt already exists | Use the saved session or recovery; do not delete originals |
+| A saved session is found | The program explains its phase and offers continuation/recovery; originals are retained |
 | Readback after a write not confirmed | The write result is uncertain; allow controller rollback |
 | Repeated fastboot entry after unlocking started | A marker may remain; use the original receipt and `--recover` |
 
@@ -286,6 +300,6 @@ Original project contributors:
 
 Upstream also credits Meta Red Team X, Google Android Security Team, JD Labs, agg23 and rabits for the discovery, fix, analysis and PoC of CVE-2024-31317.
 
-The suite contains 107 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH and Unicode paths. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
+The suite contains 145 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH and Unicode paths. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
 
 The [GNU GPL v3](LICENSE) license is retained from upstream. The utility is provided without warranties; see LICENSE for the complete terms.

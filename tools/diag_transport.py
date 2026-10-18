@@ -18,6 +18,14 @@ import time
 import usb.core
 import usb.util
 
+
+class DiagIdentityError(RuntimeError):
+    """The connected DIAG device cannot be bound to the selected session."""
+
+
+class DiagUnavailable(RuntimeError):
+    """The expected DIAG interface is not accessible yet."""
+
 VID = 0x0482
 PID = 0x0A9D
 
@@ -97,18 +105,18 @@ class DiagTransport:
         self._closed = False
         devices = list(usb.core.find(idVendor=VID, idProduct=PID, find_all=True))
         if not devices:
-            raise RuntimeError(
+            raise DiagUnavailable(
                 f"USB {VID:04x}:{PID:04x} не найден. Проверьте: (1) телефон в "
                 "композиции diag,modem,adb (README.md#diagnostics); "
                 "(2) на Windows установлен WinUSB-драйвер на диаг-интерфейс "
                 "(README.md#drivers); (3) права/udev на Linux."
             )
         if len(devices) != 1:
-            raise RuntimeError("Подключено несколько BALMUDA DIAG-устройств. Оставьте одно.")
+            raise DiagIdentityError("Подключено несколько BALMUDA DIAG-устройств. Оставьте одно.")
         self.dev = devices[0]
         expected_serial = os.environ.get("ANDROID_SERIAL")
         if expected_serial and self.dev.serial_number != expected_serial:
-            raise RuntimeError("Серийный номер DIAG не совпадает с выбранным ADB. Запись запрещена.")
+            raise DiagIdentityError("Серийный номер DIAG не совпадает с выбранным ADB. Запись запрещена.")
         cfg = self.dev.get_active_configuration()
         try:
             if self.dev.is_kernel_driver_active(INTERFACE):
