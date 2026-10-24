@@ -89,6 +89,13 @@ class FakeDevice:
                                "ro.boot.slot_suffix": "_b", "ro.twrp.version": artifact.TWRP_VERSION,
                                "ro.vendor.build.fingerprint": artifact.TWRP_FINGERPRINT}
 
+    def use_x01a(self):
+        # Recorded stock X01A getprop; keep independent of the production profile.
+        self.props.update({"ro.product.model": "X01A", "ro.product.vendor.model": "X01A",
+                           "ro.build.version.incremental": "1.280MI.0648.a",
+                           "ro.build.fingerprint": "BALMUDA/X01A/X01A:12/SKQ1.220303.001/1.280MI.0648.a:user/release-keys",
+                           "ro.vendor.build.fingerprint": "BALMUDA/X01A/X01A:11/RKQ1.220301.001/1.280MI.0648.a:user/release-keys"})
+
     def run(self, args, **kwargs):
         args = list(map(str, args))
         self.calls.append((args, kwargs))
@@ -238,8 +245,8 @@ class RecoveryTests(unittest.TestCase):
             self.flow.execute()
         self.assertFalse(self.host.calls)
 
-    def test_x01a_other_build_vendor_and_slot_refuse_before_reboot(self):
-        for key, value in (("ro.product.model", "X01A"), ("ro.boot.slot_suffix", "_a"),
+    def test_other_model_build_vendor_and_slot_refuse_before_reboot(self):
+        for key, value in (("ro.product.model", "OTHER"), ("ro.boot.slot_suffix", "_a"),
                            ("ro.build.version.incremental", "1.270PO.0682.a"),
                            ("ro.vendor.build.fingerprint", "other"), ("sys.boot_completed", "0")):
             before = self.host.props[key]
@@ -248,6 +255,41 @@ class RecoveryTests(unittest.TestCase):
                 self.flow.execute()
             self.host.props[key] = before
         self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+
+    def test_x01a_installs_same_recovery_and_records_its_own_stock_build(self):
+        self.host.use_x01a()
+        original = self.host.partition
+        self.assertEqual(self.flow.execute(), 0)
+        state = json.loads((self.flow.folder / "state.json").read_text())
+        self.assertEqual(state["phase"], "completed")
+        self.assertEqual(state["stock_model"], "X01A")
+        self.assertEqual(state["stock_build"], "1.280MI.0648.a")
+        self.assertEqual((self.flow.folder / state["backup"]).read_bytes(), original)
+        self.assertEqual(self.host.partition, self.data)
+        self.assertEqual(self.writes()[0][0][3:5], ["flash", "recovery_b"])
+        self.assertFalse(any("flashing" in args or "su" in args for args, _ in self.host.calls))
+
+    def test_x01a_rejects_cross_model_build_and_fingerprints_before_reboot(self):
+        self.host.use_x01a()
+        for key, value in (("ro.product.vendor.model", "A101BM"),
+                           ("ro.build.version.incremental", "1.280PO.0686.a"),
+                           ("ro.build.fingerprint", artifact.STOCK_FINGERPRINT),
+                           ("ro.vendor.build.fingerprint", artifact.VENDOR_FINGERPRINT)):
+            with self.subTest(key=key):
+                original = self.host.props[key]
+                self.host.props[key] = value
+                with self.assertRaises(recovery.RecoveryError):
+                    self.flow.execute()
+                self.host.props[key] = original
+        self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+
+    def test_model_is_bound_across_the_android_return(self):
+        self.flow.select_android()
+        self.host.use_x01a()
+        with self.assertRaisesRegex(recovery.RecoveryError, "model changed"):
+            self.flow.android_identity()
         self.assertFalse(self.writes())
 
     def test_other_selected_serial_multiple_and_unauthorized_devices_refuse(self):
@@ -549,6 +591,13 @@ class CombinedTests(unittest.TestCase):
         self.assertEqual(len(self.writes()), 1)
         self.assertEqual(self.flow.state["phase"], "completed")
 
+    def test_x01a_combined_flow_continues_after_completed_or_fresh_unlock(self):
+        self.host.use_x01a()
+        self.assertEqual(self.combo(fresh=True), 0)
+        self.assertEqual(len(self.writes()), 1)
+        self.assertEqual(self.flow.state["stock_model"], "X01A")
+        self.assertEqual(self.flow.state["stock_build"], "1.280MI.0648.a")
+
     def test_real_unlock_workflow_on_unlocked_phone_continues_without_unlock_or_wipe(self):
         args = types.SimpleNamespace(lang="en", non_interactive=True, verbose=False,
                                      recovery_image=self.image, session=None,
@@ -559,6 +608,11 @@ class CombinedTests(unittest.TestCase):
             self.assertEqual(combined_workflow.combined(self.root, args, unlock.Workflow), 0)
         self.assertEqual(len(self.writes()), 1)
         self.assertFalse(any("flashing" in args or "chkcode" in args for args, _ in self.host.calls))
+
+    def test_real_unlock_workflow_accepts_already_unlocked_x01a_without_wipe(self):
+        self.host.use_x01a()
+        self.test_real_unlock_workflow_on_unlocked_phone_continues_without_unlock_or_wipe()
+        self.assertEqual(self.flow.state["stock_build"], "1.280MI.0648.a")
 
     def test_fresh_unlock_waits_for_setup_before_installing(self):
         with patch("builtins.input", return_value="yes") as prompt:
@@ -607,7 +661,7 @@ class CombinedTests(unittest.TestCase):
         self.assertFalse(self.host.calls)
 
     def test_unsupported_phone_is_rejected_before_unlock(self):
-        self.host.props["ro.product.model"] = "X01A"
+        self.host.props["ro.product.model"] = "OTHER"
         self.assertEqual(self.combo(), 1)
         self.assertIsNone(self.unlock_stage)
         self.assertFalse(self.writes())

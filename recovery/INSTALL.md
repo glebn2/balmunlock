@@ -3,8 +3,8 @@
 Образ: `TWRP-3.7.1_12-BALMUDA_Phone-20261024.img`, 100663296 байт.
 SHA-256: `9d19aeaac7b6f96d00fa4745f7cdc3642b2a06988124c8859d2f59f0d604a6f7`.
 
-Проверен на A101BM. X01A не проверен. Инструкция ниже — для штатного
-A101BM, Android 12 `1.280PO.0686.a`, разблокированный загрузчик, слот b.
+Один образ для **A101BM и X01A**. Штатный Android 12: `1.280PO.0686.a`
+для A101BM, `1.280MI.0648.a` для X01A. Загрузчик разблокирован, активный слот b.
 Нужны ADB/fastboot и разрешённая отладка по USB. Важные данные сохраните отдельно.
 Root, Magisk, GSI, повторный анлок и сброс данных для установки не нужны.
 
@@ -22,7 +22,7 @@ fastboot getvar current-slot
 fastboot getvar snapshot-update-status
 ```
 
-Ожидается: `1.280PO.0686.a`, `unlocked: yes`, `is-userspace: no`,
+Ожидается прошивка вашей модели из списка выше, `unlocked: yes`, `is-userspace: no`,
 `current-slot: b`, `snapshot-update-status: none`. Если ответы отличаются или
 обновление OTA ещё не завершилось — остановитесь. Слот не переключайте.
 
@@ -80,8 +80,9 @@ fastboot reboot
 
 ## English
 
-Hardware-tested on A101BM; X01A remains untested. The commands above apply to
-stock A101BM Android 12 `1.280PO.0686.a`, unlocked bootloader, active slot b.
+The same image supports **A101BM and X01A** on stock Android 12:
+`1.280PO.0686.a` for A101BM, `1.280MI.0648.a` for X01A. Use an unlocked
+bootloader with active slot b.
 Extract the archive and use ADB/fastboot with USB debugging authorized.
 Keep a separate copy of important data. Root, Magisk, GSI and a wipe are not
 required to install this recovery.

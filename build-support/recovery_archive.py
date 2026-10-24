@@ -10,8 +10,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 from recovery_image import IMAGE_NAME, IMAGE_SHA256, IMAGE_SIZE, image_path, verify_image, file_hash
 
 ARCHIVE_NAME = IMAGE_NAME.removesuffix(".img") + ".zip"
-ARCHIVE_URL = f"https://github.com/glebn2/balmunlock/releases/download/v0.5.0/{ARCHIVE_NAME}"
-ARCHIVE_SHA256 = "ca82e56feb5d3e835d318cf06940e50fb3408aefaac8fa49299bec7294d5f1d2"
+ARCHIVE_URL = f"https://github.com/glebn2/balmunlock/releases/download/v0.5.1/{ARCHIVE_NAME}"
+ARCHIVE_SHA256 = "b1b3d90f6dbebe3ac1ea76903a915a8925750716272ecb09c4b764abafb1cd72"
 
 
 def read_image(archive_path):

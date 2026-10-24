@@ -1140,7 +1140,7 @@ def main():
     parser.add_argument("--session", metavar="SERIAL_OR_KEY", help=help_text("выбрать сохранённый сеанс; legacy — старые файлы рядом с программой", "select a saved session; legacy selects older files beside the program"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--unlock", action="store_true", help=help_text("перейти к разблокировке без стартового меню", "open the unlock workflow without the start menu"))
-    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить проверенный TWRP на уже разблокированный A101BM 1.280, слот b", "install the pinned TWRP on an already unlocked A101BM 1.280, slot b"))
+    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить TWRP на уже разблокированный A101BM или X01A 1.280, слот b", "install TWRP on an already unlocked A101BM or X01A 1.280, slot b"))
     mode.add_argument("--unlock-and-recovery", action="store_true", help=help_text("разблокировать загрузчик, затем установить TWRP на тот же телефон", "unlock the bootloader, then install TWRP on the same phone"))
     mode.add_argument("--check-recovery-image", action="store_true", help=help_text("проверить образ TWRP на ПК, без ADB/USB", "verify the TWRP image on the host, without ADB/USB"))
     parser.add_argument("--recovery-image", type=Path, help=help_text("путь к образу TWRP; SHA-256 должен совпасть с закреплённым", "TWRP image path; must match the pinned SHA-256"))

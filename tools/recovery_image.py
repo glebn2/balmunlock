@@ -13,6 +13,17 @@ STOCK_BUILD = "1.280PO.0686.a"
 STOCK_FINGERPRINT = f"BALMUDA/A101BM/A101BM:12/SKQ1.220303.001/{STOCK_BUILD}:user/release-keys"
 VENDOR_FINGERPRINT = f"BALMUDA/A101BM/A101BM:11/RKQ1.220301.001/{STOCK_BUILD}:user/release-keys"
 TWRP_FINGERPRINT = "BALMUDA/twrp_A101BM/A101BM:12/SP2A.220405.004/builder10212025:eng/test-keys"
+STOCK_IDENTITIES = {
+    model: {
+        "ro.product.model": model,
+        "ro.product.vendor.model": model,
+        "ro.build.version.sdk": "31",
+        "ro.build.version.incremental": build,
+        "ro.build.fingerprint": f"BALMUDA/{model}/{model}:12/SKQ1.220303.001/{build}:user/release-keys",
+        "ro.vendor.build.fingerprint": f"BALMUDA/{model}/{model}:11/RKQ1.220301.001/{build}:user/release-keys",
+    }
+    for model, build in (("A101BM", STOCK_BUILD), ("X01A", "1.280MI.0648.a"))
+}
 
 
 def file_hash(path):

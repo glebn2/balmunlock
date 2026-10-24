@@ -14,8 +14,8 @@ import time
 import uuid
 
 from operation_signals import OperationSignals
-from recovery_image import (IMAGE_NAME, IMAGE_SHA256, IMAGE_SIZE, STOCK_BUILD,
-                            STOCK_FINGERPRINT, TWRP_VERSION, TWRP_MODEL, TWRP_FINGERPRINT, VENDOR_FINGERPRINT,
+from recovery_image import (IMAGE_NAME, IMAGE_SHA256, IMAGE_SIZE, STOCK_IDENTITIES,
+                            TWRP_VERSION, TWRP_MODEL, TWRP_FINGERPRINT,
                             file_hash, image_path, verify_image)
 from session_lock import session_lock
 from session_store import SessionStore, directory_key, regular_path, valid_serial
@@ -53,6 +53,8 @@ class RecoveryInstaller:
         self.root = Path(root).resolve()
         self.lang, self.interactive, self.verbose = lang, interactive, verbose
         self.serial = None
+        self.stock_model = None
+        self.stock_build = None
         self.folder = None
         self.state = {}
         self.events = []
@@ -136,15 +138,18 @@ class RecoveryInstaller:
 
     def android_identity(self):
         props = self.properties()
-        expected = {"ro.boot.serialno": self.serial, "ro.product.model": "A101BM",
-                    "ro.product.vendor.model": "A101BM", "ro.boot.slot_suffix": "_b",
-                    "ro.build.version.sdk": "31", "ro.build.version.incremental": STOCK_BUILD,
-                    "ro.build.fingerprint": STOCK_FINGERPRINT,
-                    "ro.vendor.build.fingerprint": VENDOR_FINGERPRINT}
+        model = props.get("ro.product.model")
+        if model not in STOCK_IDENTITIES:
+            self.fail("Нужен BALMUDA Phone A101BM или X01A.", "BALMUDA Phone A101BM or X01A required.")
+        if self.stock_model is not None and model != self.stock_model:
+            self.fail("Модель телефона изменилась в ходе установки.", "Phone model changed during installation.")
+        expected = {**STOCK_IDENTITIES[model], "ro.boot.serialno": self.serial, "ro.boot.slot_suffix": "_b"}
         for key, value in expected.items():
             if props.get(key) != value:
-                self.fail(f"Не подходит {key}: {props.get(key)!r}. Нужен штатный A101BM 1.280, слот b.",
-                          f"Identity mismatch for {key}: {props.get(key)!r}. Requires stock A101BM 1.280, slot b.")
+                self.fail(f"Не подходит {key}: {props.get(key)!r}. Нужен штатный {model} 1.280, слот b.",
+                          f"Identity mismatch for {key}: {props.get(key)!r}. Requires stock {model} 1.280, slot b.")
+        self.stock_model = model
+        self.stock_build = expected["ro.build.version.incremental"]
         return props
 
     def clean_unlock_session(self):
@@ -249,7 +254,7 @@ class RecoveryInstaller:
         self.folder.mkdir()
         (self.folder / "recovery-install.log").write_text("".join(self.events), encoding="utf-8")
         self.save("confirmed", image_sha256=IMAGE_SHA256, image_bytes=IMAGE_SIZE,
-                  partition=PARTITION, stock_build=STOCK_BUILD)
+                  partition=PARTITION, stock_model=self.stock_model, stock_build=self.stock_build)
 
     def select_android(self):
         """Read-only admission, also used before the combined workflow can wipe."""
@@ -275,9 +280,9 @@ class RecoveryInstaller:
                       f"Missing {IMAGE_NAME}. Place the verified image in the recovery directory beside the app.")
         self.select_android()
         self.clean_unlock_session()
-        self.say("Установка TWRP: A101BM 1.280, слот b. Сохраню текущий recovery на ПК, затем заменю только recovery_b. "
+        self.say(f"Установка TWRP: {self.stock_model} {self.stock_build}, слот b. Сохраню текущий recovery на ПК, затем заменю только recovery_b. "
                  "Сохраните важные данные отдельно. Продолжить? [yes/N]",
-                 "Install TWRP: A101BM 1.280, slot b. Back up the current recovery, then replace recovery_b only. "
+                 f"Install TWRP: {self.stock_model} {self.stock_build}, slot b. Back up the current recovery, then replace recovery_b only. "
                  "Keep a separate copy of important data. Continue? [yes/N]")
         if input().strip().lower() != "yes":
             return 0

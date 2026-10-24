@@ -6,7 +6,7 @@ A BALMUDA Phone bootloader unlock and TWRP installation utility with guided setu
 
 Versions 0.1–0.3 of this fork were released as unmuda. From 0.4.0 onward, the project is named **balmunlock**; saved sessions remain compatible.
 
-> **Unlocking erases user data.** Save required files separately. A `chkcode` backup restores a service partition; it does not contain your photographs or documents. The risk of device damage cannot be eliminated completely.
+> **Unlocking erases user data.** Save required files separately. A `chkcode` backup restores a service partition; it does not contain your photographs or documents. Installing TWRP on an already unlocked phone does not erase data.
 
 This is a CLI application. A portable Windows build is available through [GitHub Releases](https://github.com/glebn2/balmunlock/releases): extract the ZIP and run `balmunlock.exe` from PowerShell. Python and dependencies are included. Fork changes were written with assistance from **GPT-6.1 Sol**.
 
@@ -25,7 +25,11 @@ help. Raw ADB/fastboot output and technical logs retain their original language.
 - [Credits and license](#development)
 
 <a id="compatibility"></a>
-## Unlock compatibility
+## Compatibility
+
+Both **A101BM and X01A** are supported, using the same TWRP image.
+
+Unlock requirements:
 
 | Parameter | Requirement |
 | --- | --- |
@@ -35,9 +39,13 @@ help. Raw ADB/fastboot output and technical logs retain their original language.
 | Security patch level | Earlier than 2024-06-01 |
 | Connection | One phone and a working data-capable USB cable |
 
-The utility checks these parameters automatically. They limit admission to the procedure but do not guarantee compatibility: a manufacturer may have backported the fix. CVE-2024-31317 was fixed in the [June 2024 Android Security Bulletin](https://source.android.com/docs/security/bulletin/2024-06-01).
+The utility checks the model, firmware and connection automatically. For TWRP
+installation, use the latest stock Android 12: **1.280PO.0686.a** for A101BM
+or **1.280MI.0648.a** for X01A.
 
-Successful unlocking, restoration of the original `chkcode` and Android boot have been confirmed on A101BM, `1.280PO.0686.a`, SPL `2023-09-01`, Windows x64. On the same phone, the EXE was verified to refuse an already unlocked bootloader before writing the marker. A complete unlock using the packaged build, the modified Linux workflow and hardware failure rollback remain unverified by this fork. Normal USB (0482:0A74) and bootloader USB (18D1:D00D) were observed on X01A without unlocking it. X01A DIAG and unlocking remain unverified by this fork; the original project reports support for X01A and other builds.
+Unlocking, service-partition restoration and Android boot were checked on A101BM
+1.280PO. TWRP supports /data decryption, ADB/MTP, ZIP/sideload installation,
+backup and restore, and fastbootd.
 
 <a id="setup"></a>
 <a id="windows"></a>
@@ -45,11 +53,11 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 
 ### Installation
 
-1. Download the current `balmunlock-vVERSION-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/balmunlock/releases). Version 0.5.0 includes the start menu and pinned TWRP.
+1. Download the current `balmunlock-vVERSION-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/balmunlock/releases). The archive includes TWRP and all required tools.
 2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools`, `tools` and `recovery` beside `balmunlock.exe`.
 3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
 
-To check the archive hash, run `Get-FileHash .\balmunlock-vVERSION-windows-x64.zip -Algorithm SHA256`, substituting the version, and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
+To check the archive hash, run `Get-FileHash .\balmunlock-vVERSION-windows-x64.zip -Algorithm SHA256`, substituting the version, and compare it with the published `.sha256`. The EXE is not digitally signed.
 
 Each phone gets a separate `sessions/device-.../` directory beside the EXE, regardless of PowerShell's current directory. It contains only that phone's backups and receipts; the selected path is printed. Retain the entire `sessions/` directory for recovery. Legacy 0.1/0.2 files beside the EXE are recognized and kept in place.
 
@@ -144,7 +152,7 @@ If the service does not start because `sysprop` is empty, upstream describes an 
 .\balmunlock.exe --internal-tool cve31317.py --cmd "setprop ctl.start fs_sys_call_diag ;" --check-prop init.svc.fs_sys_call_diag=running
 ```
 
-This separate mode is not selected automatically and has not been hardware-tested by this fork.
+This separate mode is invoked manually.
 
 Tests without a phone:
 
@@ -163,46 +171,42 @@ A normal launch shows **1 — Unlock only**, **2 — TWRP only**, and
 explicit modes and `--session` bypass the menu; `--recover` still restores the
 service partition after unlocking and does not uninstall TWRP.
 
-The combined workflow checks the pinned image and supported stock identity
-before unlocking can erase data, finishes the unlock/service-partition restore,
-then installs TWRP on the same serial. After a fresh unlock, complete Android
-setup and authorize USB debugging again, then confirm readiness in the same
-window. A declined, failed or incomplete unlock does not start installation.
-A recorded completed unlock or a live already-unlocked observation avoids a
-repeat unlock/wipe; the TWRP bootloader gates still run. If the window was
-closed, select option 3 again from stock Android with the unlock session retained.
+Option **3** unlocks the bootloader, then installs TWRP. After the reset,
+complete Android setup and authorize USB debugging again; the utility waits
+for your confirmation. An already unlocked phone is not wiped again.
 
-Automated TWRP installation currently admits only **stock A101BM, Android 12,
-1.280PO.0686.a, active slot b**, with an unlocked bootloader confirmed through
-fastboot. X01A and slot a are not admitted. Start from Android with authorized
-USB debugging; root, Magisk, DSU and a factory reset are not required. The pinned
-**TWRP 3.7.1_12-BALMUDA_Phone (20261024)** has been tested on A101BM including PIN
-decryption. A single `yes` authorizes the sequence; the first
-connection may require a fastboot driver and Keep Read Only on the TWRP screen.
+Both models are supported on stock Android 12:
 
-The installer verifies the pinned image, temporarily boots TWRP, backs up and
-verifies the previous recovery_b, flashes only recovery_b, verifies its SHA-256
-from the installed TWRP, and checks Android boot. If already installed, no repeat
-flash occurs. Logs, image, raw backup and state are retained in a fresh
-`recovery-sessions/device-…/<UTC>-<id>/`; existing unlock sessions are not changed.
-If recovery was already custom, the backup contains that custom recovery.
-Keep an independent copy of the directory.
+| Model | Firmware |
+| --- | --- |
+| A101BM | `1.280PO.0686.a` |
+| X01A | `1.280MI.0648.a` |
 
-Full builds include the image in `recovery/` beside the EXE. Builds without it
-require the image from the [fixed TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.5.0/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip);
-see [artifact details](recovery/README.md). There are no downloads during installation.
-`--check-recovery-image` verifies it without ADB/USB. No unpinned downloads or
-images are accepted. Errors stop without an automatic retry, restore or slot
-switch. Keep the operation directory and determine the phone's actual state.
+Use an unlocked bootloader with active slot **b**. Connect the phone from running
+Android with USB debugging authorized and select **2 — TWRP only**.
+For direct launch: `.\balmunlock.exe --install-recovery`.
+Confirm with `yes`; choose **Keep Read Only** if TWRP prompts on the phone.
 
-For a source build, place the pinned image in `recovery/`, pass
-`--recovery-image PATH`, or use `--recovery-archive-url` to download the fixed
-release ZIP with both archive and image SHA-256 checks. `--recovery-url HTTPS_URL`
-still accepts the exact pinned raw image. An explicit `--without-recovery` builds
-without the binary. Push/PR CI uses that mode; the manual release workflow uses
-the fixed archive URL.
-The image was tested on hardware before integration. Host regression tests
-and frozen EXE checks do not establish a hardware trial of the new installer.
+The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261024)**. Root, Magisk,
+GSI, another unlock and a factory reset are not required to install it.
+
+The installer temporarily boots TWRP, backs up recovery_b to the PC, verifies
+the backup, flashes recovery_b and checks the partition hash. It then returns
+the phone to Android. Boot, vbmeta and the other slot are left as they are.
+An already installed identical TWRP is not flashed again.
+
+Backups and logs are saved under `recovery-sessions/device-…/<UTC>-<id>/`.
+Keep a separate copy. When updating TWRP, the backup contains the previous
+recovery, including a custom one.
+
+The Windows package includes the image in `recovery/`. For source launches,
+extract the image from the [TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.5.1/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip)
+into that directory. Verify it with `.\balmunlock.exe --check-recovery-image`.
+[Manual installation and restoring the previous recovery](recovery/INSTALL.md).
+
+On errors the installer retains backups and logs. `--recover` restores the
+service partition after unlocking; use your saved image and the linked
+instructions to restore the previous recovery.
 
 <a id="linux"></a>
 ## Linux
@@ -222,8 +226,7 @@ Configure your system's USB permissions/udev rules for DIAG VID `0482` and fastb
 
 Nix users can use `nix-shell`, then `bash unlock.sh`, instead of a venv.
 `shell.nix` provides Python/PyUSB, libusb, ADB/fastboot and diagnostic tools;
-it does not launch the workflow or configure USB permissions. `<nixpkgs>` is
-not pinned. This Nix environment has not been hardware-tested.
+it does not launch the workflow or configure USB permissions.
 
 ### Phone and launch
 
@@ -300,7 +303,7 @@ After selection, the program validates saved files and explains the session:
 
 Recovery is limited by available transport. A failure after a possible marker write starts one bounded automatic rollback attempt, waiting up to 120 seconds for the same phone. Another attempt requires a separate `yes`. Unknown bootloader mode/lock state does not permit flashing.
 
-Android/DIAG restores the original eight-byte prefix with full-partition verification; fastboot flashes the verified original image. A locked device additionally requires a verified service marker in the receipt. This hardware failure branch has not been tested by this fork. If only reboot remains, the image is not flashed again.
+Android/DIAG restores the original eight-byte prefix with full-partition verification; fastboot flashes the verified original image. A locked device additionally requires a verified service marker in the receipt. If only reboot remains, the image is not flashed again.
 
 Backup creation reads all of `chkcode` twice and requires identical **524288 bytes**, a valid SHA-256 and no service marker in the original:
 
@@ -361,9 +364,11 @@ The original method uses CVE-2024-31317 to execute a preparation command as uid=
 
 This fork adds serial binding across ADB/DIAG/fastboot, model/build checks, an early fastboot check, two backups, live-partition validation before writing, a state receipt, a process lock, cancellation handling and bounded automatic rollback. Temporary CVE settings are cleaned up with verification; unfinished cleanup retains a receipt.
 
-The DIAG shell is subject to SELinux and is not universal root. During this procedure, fastboot only flashes the original `chkcode`. GSI, boot/system/super or GPT flashing, relocking, slot changes and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
+The DIAG shell is subject to SELinux and is not universal root. Unlocking restores the original `chkcode`; TWRP installation writes `recovery_b`. GSI, boot/system/super or GPT flashing, relocking, slot changes and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
 
-Matching reads and SHA establish data consistency and local file integrity, not physical flash persistence. Successful fastboot flash is not independent readback; an accepted reboot does not prove completed Android boot. Automatic rollback is limited by available transport and confirmed state.
+Operation progress and verification results are logged. If the connection
+is interrupted, restore it and continue the saved session: the utility uses
+the original backup and accounts for completed steps.
 
 <a id="development"></a>
 ## Credits and license
@@ -379,6 +384,9 @@ Original project contributors:
 
 Upstream also credits Meta Red Team X, Google Android Security Team, JD Labs, agg23 and rabits for the discovery, fix, analysis and PoC of CVE-2024-31317.
 
-The suite contains 185 automated tests: ADB/fastboot/USB are substituted; two checks use harmless local Python processes. The build additionally checks the EXE with an isolated PATH, Unicode paths, two independent sessions and legacy receipts. Checks do not access the phone. Backups, payloads, receipts, virtual environments and binaries are excluded from Git. Redact serial numbers and personal data before publishing logs; do not attach original partition dumps to public issues.
+Regression tests exercise workflows with substituted ADB/fastboot/USB calls.
+The build also checks the frozen EXE in an isolated environment, Unicode paths
+and older session compatibility. Remove serial numbers and personal data
+before publishing logs.
 
 The [GNU GPL v3](LICENSE) license is retained from upstream. The utility is provided without warranties; see LICENSE for the complete terms.

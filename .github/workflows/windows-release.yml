@@ -8,7 +8,7 @@ on:
     inputs:
       release_tag:
         description: Release tag matching runtime_paths.VERSION
-        default: v0.5.0
+        default: v0.5.1
         required: true
         type: string
       publish_release:
@@ -18,7 +18,7 @@ on:
         type: boolean
       recovery_archive_url:
         description: HTTPS URL of the fixed TWRP ZIP (both archive and image hashes are pinned)
-        default: 'https://github.com/glebn2/balmunlock/releases/download/v0.5.0/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip'
+        default: 'https://github.com/glebn2/balmunlock/releases/download/v0.5.1/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip'
         required: false
         type: string
 
