@@ -245,7 +245,7 @@ class GuidedTests(WorkflowFixture):
         self.prepared()
         self.flow.save_state("reboot_submitted", reboot_pending=False)
         output = io.StringIO()
-        with patch.object(unlock.sys, "argv", ["unlock", "--guided"]), \
+        with patch.object(unlock.sys, "argv", ["unlock", "--unlock", "--guided"]), \
                 patch("builtins.input", side_effect=AssertionError("No question expected")), contextlib.redirect_stdout(output):
             self.assertEqual(unlock.main(), 0)
         self.assertNotIn("ERASE", output.getvalue())

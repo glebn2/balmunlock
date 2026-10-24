@@ -290,7 +290,7 @@ class SessionRoutingTests(WorkflowFixture):
             if path.name != "session.json":
                 (self.root / path.name).write_bytes(path.read_bytes())
         before = (self.root / "chkcode_backup.device.json").read_bytes()
-        with patch.object(unlock.sys, "argv", ["unlock", "--guided"]), patch("builtins.input", return_value="yes"):
+        with patch.object(unlock.sys, "argv", ["unlock", "--unlock", "--guided"]), patch("builtins.input", return_value="yes"):
             self.assertEqual(unlock.main(), 0)
         selected = self.store.select("SERIAL")
         self.assertEqual(json.loads((selected.root / "chkcode_backup.device.json").read_text())["phase"], "reboot_submitted")

@@ -65,7 +65,7 @@ class ConsoleTests(WorkflowFixture):
             self.flow.introduce()
             self.flow.bind_session(session)
             self.assertEqual(self.flow.guided(self.args), 0)
-        self.assertEqual(output.getvalue().count("balmunlock 0.4.0"), 1)
+        self.assertEqual(output.getvalue().count("balmunlock " + unlock.VERSION), 1)
         self.assertEqual(output.getvalue().count(str(session.root)), 1)
 
     def test_declining_authorization_retry_stops_instead_of_asking_to_retry_again(self):

@@ -22,3 +22,5 @@ unmuda-last-error.txt
 balmunlock.log
 .test-unmuda-*/
 sessions/
+recovery-sessions/
+recovery/*.img

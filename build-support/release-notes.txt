@@ -1,19 +1,61 @@
-balmunlock 0.4.0 — new name and clearer console guidance
+balmunlock 0.5.0 — start menu and TWRP installation
 
-Windows x64: extract the complete ZIP into a writable folder, open PowerShell there and run .\balmunlock.exe. Python, USB libraries and Android Platform-Tools are included. Keep _internal, platform-tools and tools beside the EXE. Linux: use Source code and the Linux README section.
+Extract the complete ZIP into a writable directory and run balmunlock.exe.
+The entry menu offers unlock only, TWRP only, or unlock + TWRP. Explicit
+--unlock, --install-recovery and --unlock-and-recovery bypass the menu; --recover keeps its existing
+service-partition recovery meaning. Unlock receipts remain compatible.
 
-What changed:
-- This fork is now named balmunlock. The EXE, archives, repository links and help use the new name. The original unmuda method, authors and GPL v3 license remain credited.
-- Normal console output shows the current step and required action. Dependency dumps, JSON and helper output are retained in balmunlock.log; --verbose also shows technical output in the console. --preflight remains a detailed host-only check.
-- The version and backup directory are shown once. Session menus use readable stage descriptions; enter r to search for a newly connected phone without restarting.
-- Declining a setup retry stops the workflow without another retry question. Fastboot instructions match Windows/Linux, and the unlock prompt explains the volume/power-button confirmation.
-- Recovery distinguishes restoring the partition from finishing a pending reboot, without repeating a completed flash.
-- Existing per-device directories and v1 receipts remain compatible. Phones retain separate originals, checksums and recovery state; no backup migration or overwrite is performed automatically.
+UI language is now automatic: Windows user display language, or Linux message
+locale (LC_ALL > LC_MESSAGES > LANG). Russian selects RU; every other language
+falls back to EN. Explicit --lang ru/en overrides the default. The Linux
+unlock.sh entry point uses the same controller and no longer forces Russian;
+unlock.en.sh remains the English alias. Nix only provides dependencies.
 
-Normal terminals enable guided prompts automatically. --guided explicitly enables them with redirected input; --non-interactive keeps strict stop-on-error behavior. An ordinary launch offers the appropriate recovery action; --recover remains available.
+The combined option prechecks the image and supported identity before a wipe,
+requires completed unlock and service-partition restore, and binds the TWRP
+stage to the same serial. After a fresh unlock, finish Android setup and
+reauthorize USB debugging before confirming readiness. Declining or failing
+the unlock never starts TWRP. Already unlocked/completed phones are not wiped
+again. A new device trial of the combined workflow is still pending.
 
-Upgrading: extract the whole new archive and retain the old directory. Copy legacy chkcode_backup* files and cve_cleanup.device.json (if present) beside the new EXE. If you already have a sessions directory, copy it intact as well. Do not merge different phones' files into one session, overwrite/delete originals or regenerate checksums to bypass validation. Keep the complete sessions directory for recovery.
+TWRP installation admits stock A101BM Android 12 1.280PO.0686.a, active slot b,
+with a bootloader confirmed unlocked. X01A and active slot a are not admitted.
+The pinned TWRP 3.7.1_12-BALMUDA_Phone (20261024) image is temporarily booted to back up recovery_b;
+the backup is checked before any flash. Only recovery_b is written, read back
+by SHA-256, and followed by a checked return to Android. An already installed
+identical image is not flashed again. No root preparation, factory reset,
+slot switch, boot/dtbo/vbmeta flash or AVB-disabling flag is used.
 
-Unlocking erases user data. The source workflow completed an unlock on A101BM 1.280PO.0686.a under Windows, and the earlier EXE's refusal of an already unlocked bootloader was verified on a phone. Normal USB (0482:0A74) and bootloader USB (18D1:D00D) were observed on X01A without unlocking it; X01A DIAG and a full unlock remain unverified by this fork. The updated flows have offline regression/frozen-EXE coverage; a complete 0.4.0 hardware unlock and hardware failure rollback remain unverified. The EXE is not digitally signed.
+Image, original recovery backup, checksums, log and durable receipt are kept
+under recovery-sessions/device-.../<UTC>-<id>/. Keep this directory on another
+medium too. Old backups and unlock receipts are not overwritten. Errors stop
+without automatic flash retries or restores. The writer has no host timeout;
+handled cancellation is deferred until it and the receipt complete.
 
-The ZIP includes third-party notices and corresponding libusb sources. Original method and Kyocera research: E2r7hN07Fl47/unmuda. Fork: glebn2/balmunlock, with GPT-6.1 Sol assistance. GPL v3 is retained.
+The full Windows build includes the pinned recovery image; BUILD-INFO.json
+records whether it was bundled. --check-recovery-image is host-only. An
+explicit --without-recovery build requires the pinned image separately.
+
+The separate fixed TWRP ZIP contains the image, SHA256SUMS, bilingual manual
+installation instructions and changelog. Image SHA-256:
+9d19aeaac7b6f96d00fa4745f7cdc3642b2a06988124c8859d2f59f0d604a6f7
+TWRP ZIP SHA-256:
+ca82e56feb5d3e835d318cf06940e50fb3408aefaac8fa49299bec7294d5f1d2
+The Windows builder can fetch this exact archive; it verifies the archive and
+embedded image independently. Runtime installation makes no network downloads.
+
+The recovery port's A101BM hardware checks include stock decryption without
+PIN and with PIN, LineageOS PIN/pattern, ADB/MTP, ZIP/sideload, backup/restore,
+fastbootd, wipe/format and Android return. This release also fixes locksettings
+handling, display sleep, battery indication and post-format logical mounts.
+The built-in MindTheGapps-17 workaround runs on TWRP Reboot -> System, not adb
+reboot. LineageOS decryption requires the stock-compatible boot header OS/patch
+11.0.0 / 2023-09. X01A has not been hardware-tested with this recovery.
+
+The integrated installer has host-only regression/frozen-build coverage;
+a device trial of this automated sequence is still pending. Full packaged
+unlock and hardware failure rollback remain untested.
+
+Unlocking erases user data; installing TWRP does not require a wipe. The EXE
+is unsigned. Credits: TeamWin and the separately maintained A101BM TWRP port;
+original unlock method E2r7hN07Fl47/unmuda; fork glebn2/balmunlock. GPL v3 retained.

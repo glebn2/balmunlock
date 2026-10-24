@@ -3,15 +3,19 @@ import runpy
 import sys
 
 from runtime_paths import APP_NAME, HELPERS, VERSION, configure_runtime
+from ui_language import language_from_args
 
 
 def main():
     try:
         configure_runtime()
     except (OSError, RuntimeError) as error:
-        if "en" not in sys.argv:
+        if language_from_args(sys.argv[1:]) == "ru":
             print("Не удалось загрузить файлы программы. Распакуйте весь релизный ZIP в доступную папку, "
                   "сохранив _internal, platform-tools и tools рядом с EXE. Бэкапы и журналы не удаляйте.", file=sys.stderr)
+        else:
+            print("Cannot load application files. Extract the entire release ZIP, keeping _internal, "
+                  "platform-tools and tools beside the EXE. Retain backups and logs.", file=sys.stderr)
         print(f"STOP: {error}", file=sys.stderr)
         return 2
     if sys.argv[1:2] == ["--version"]:

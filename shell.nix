@@ -1,17 +1,18 @@
-# shell.nix — окружение для разблокировки BALMUDA Phone (A101BM)
-# Часть репозитория A101BM-unlock.
+# shell.nix — зависимости Linux-входа balmunlock (анлок и TWRP).
 #
 # Использование:
 #   nix-shell            # из корня репозитория
-#   cd tools && python3 cve31317.py ...
+#   bash unlock.sh       # тот же Python-контроллер и меню, RU/EN автоматически
+#   bash unlock.sh --lang en
 #
 # Доступ к USB настраивается отдельно через udev с учётом дистрибутива.
-# Зависимости и настройка прав: README.md#setup.
+# Зависимости и настройка прав: README.md#linux.
+# <nixpkgs> не закреплён: это среда зависимостей, не фиксированный build/release.
 
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  name = "a101bm-unlock";
+  name = "balmunlock";
 
   buildInputs = with pkgs; [
     # python + единственная зависимость скриптов tools/

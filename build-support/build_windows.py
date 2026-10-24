@@ -14,6 +14,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from runtime_paths import VERSION
+from recovery_image import IMAGE_NAME, IMAGE_SHA256, image_path, verify_image
+from recovery_archive import ARCHIVE_NAME, ARCHIVE_URL, ARCHIVE_SHA256, read_image
 
 
 def fetch(item, cache):
@@ -33,10 +35,34 @@ def fetch(item, cache):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", type=Path, default=ROOT / ".build" / "downloads")
+    recovery = parser.add_mutually_exclusive_group()
+    recovery.add_argument("--recovery-image", type=Path, help="Bundle this pinned TWRP image")
+    recovery.add_argument("--recovery-url", help="Download the pinned image over HTTPS and bundle it")
+    recovery.add_argument("--recovery-archive-url", nargs="?", const=ARCHIVE_URL,
+                          help="Download the fixed TWRP ZIP (default: pinned release URL) and bundle its image")
+    recovery.add_argument("--without-recovery", action="store_true", help="Explicitly build without the TWRP binary")
     args = parser.parse_args()
     if sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64"):
         parser.error("Build on Windows x64 using x64 Python")
     args.cache.mkdir(parents=True, exist_ok=True)
+    recovery_source = None
+    if not args.without_recovery:
+        if args.recovery_archive_url:
+            if not args.recovery_archive_url.startswith("https://"):
+                parser.error("--recovery-archive-url must use HTTPS")
+            archive_path = fetch({"url": args.recovery_archive_url, "filename": ARCHIVE_NAME,
+                                  "sha256": ARCHIVE_SHA256}, args.cache)
+            data = read_image(archive_path)
+            recovery_source = args.cache / IMAGE_NAME
+            recovery_source.write_bytes(data)
+        elif args.recovery_url:
+            if not args.recovery_url.startswith("https://"):
+                parser.error("--recovery-url must use HTTPS")
+            recovery_source = fetch({"url": args.recovery_url, "filename": IMAGE_NAME,
+                                     "sha256": IMAGE_SHA256}, args.cache)
+        else:
+            recovery_source = image_path(ROOT, args.recovery_image)
+        recovery_source = verify_image(recovery_source)
     manifest = json.loads((ROOT / "build-support" / "downloads.json").read_text())
     platform_zip = fetch(manifest["platform_tools"], args.cache)
     sources = [fetch(item, args.cache) for item in manifest["sources"]]
@@ -62,6 +88,15 @@ def main():
     shutil.copy2(ROOT / "tools" / "balmuda-fastboot.cfg", output / "tools")
     for name in ("README.md", "README.en.md", "LICENSE"):
         shutil.copy2(ROOT / name, output / name)
+    (output / "recovery").mkdir()
+    for name in ("README.md", "INSTALL.md", "CHANGELOG-20261024.md"):
+        shutil.copy2(ROOT / "recovery" / name, output / "recovery" / name)
+    if recovery_source is not None:
+        bundled_image = output / "recovery" / IMAGE_NAME
+        shutil.copyfile(recovery_source, bundled_image)
+        verify_image(bundled_image)
+    else:
+        print("Building without the recovery binary; installation requires the pinned image separately.")
     licenses = output / "licenses"
     licenses.mkdir()
     shutil.copy2(Path(sys.base_prefix) / "LICENSE.txt", licenses / "Python-LICENSE.txt")
@@ -95,6 +130,9 @@ def main():
                 "dependencies": {name: importlib.metadata.version(name) for name in
                                  ("pyusb", "libusb-package", "importlib-resources", "pyinstaller")},
                 "downloads": manifest,
+                "recovery": {"bundled": recovery_source is not None, "filename": IMAGE_NAME,
+                             "sha256": IMAGE_SHA256, "archive_url": ARCHIVE_URL,
+                             "archive_sha256": ARCHIVE_SHA256},
                 "source": "https://github.com/glebn2/balmunlock"}
     (output / "BUILD-INFO.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     (licenses / "SOURCES.txt").write_text(

@@ -43,6 +43,29 @@ def main():
         assert f"balmunlock {VERSION}" in run(exe, "--version")
         assert "--recover" in run(exe, "--help")
         assert "--verbose" in run(exe, "--help", "--lang", "en")
+        assert "--install-recovery" in run(exe, "--help")
+        menu = run(exe, input="\n")
+        assert "1." in menu and "2." in menu and "3." in menu
+        from ui_language import default_language
+        assert ("Только разблокировка" if default_language() == "ru" else "Unlock bootloader only") in menu
+        for lang, expected_menu, expected_help in (("ru", "Только разблокировка", "показать справку"),
+                                                   ("en", "Unlock bootloader only", "show this help")):
+            assert expected_menu in run(exe, "--lang", lang, input="\n")
+            assert expected_help in run(exe, "--lang", lang, "--help")
+        # Host-only artifact verification must not start either transport.
+        from recovery_image import IMAGE_NAME
+        has_recovery = (app / "recovery" / IMAGE_NAME).exists()
+        result = run(exe, "--check-recovery-image", "--lang", "en", expected=0 if has_recovery else 1)
+        if has_recovery:
+            assert "OK (offline)" in result
+        else:
+            assert "Missing" in run(exe, "--install-recovery", "--lang", "en", input="", expected=1)
+        # Exercise the frozen installer module through an offline refusal. Its
+        # artifact gate must stop before discovery even with a phone attached.
+        assert "Missing" in run(exe, "--install-recovery", "--recovery-image", caller / "missing.img",
+                                "--lang", "en", input="", expected=1)
+        assert "stopped" in run(exe, "--unlock-and-recovery", "--recovery-image", caller / "missing.img",
+                                "--lang", "en", input="", expected=1).lower()
         preflight = run(exe, "--preflight", "--lang", "en")
         assert "libusb: available" in preflight and str(app / "platform-tools") in preflight, preflight
         for helper in ("cve31317.py", "kdiag_shell.py", "backup_chkcode.py", "unlock_chkcode.py",

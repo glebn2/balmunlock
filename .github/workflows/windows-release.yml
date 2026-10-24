@@ -8,7 +8,7 @@ on:
     inputs:
       release_tag:
         description: Release tag matching runtime_paths.VERSION
-        default: v0.4.0
+        default: v0.5.0
         required: true
         type: string
       publish_release:
@@ -16,6 +16,11 @@ on:
         default: false
         required: true
         type: boolean
+      recovery_archive_url:
+        description: HTTPS URL of the fixed TWRP ZIP (both archive and image hashes are pinned)
+        default: 'https://github.com/glebn2/balmunlock/releases/download/v0.5.0/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -48,7 +53,20 @@ jobs:
       - run: python -m pip install --require-hashes -r requirements-windows.txt -r build-support/requirements.txt
       - run: python -m pip check
       - run: python -m unittest discover -s tests -q
-      - run: python build-support/build_windows.py
+      - name: Build portable app
+        shell: pwsh
+        env:
+          RECOVERY_ARCHIVE_URL: ${{ inputs.recovery_archive_url }}
+          PUBLISH_REQUESTED: ${{ inputs.publish_release }}
+        run: |
+          if ($env:RECOVERY_ARCHIVE_URL) {
+            python build-support/build_windows.py --recovery-archive-url $env:RECOVERY_ARCHIVE_URL
+          } elseif ($env:PUBLISH_REQUESTED -eq 'true') {
+            throw 'Publishing requires the fixed TWRP archive URL.'
+          } else {
+            python build-support/build_windows.py --without-recovery
+          }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: balmunlock-windows-x64

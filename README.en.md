@@ -2,7 +2,7 @@
 
 [Русский](README.md) · **English**
 
-A BALMUDA Phone bootloader unlock utility with guided setup, backups and recovery. Runs on Windows without WSL and on Linux. Based on the method and original code from [E2r7hN07Fl47/unmuda](https://github.com/E2r7hN07Fl47/unmuda).
+A BALMUDA Phone bootloader unlock and TWRP installation utility with guided setup, backups and recovery. Runs on Windows without WSL and on Linux. Unlocking is based on the method and original code from [E2r7hN07Fl47/unmuda](https://github.com/E2r7hN07Fl47/unmuda).
 
 Versions 0.1–0.3 of this fork were released as unmuda. From 0.4.0 onward, the project is named **balmunlock**; saved sessions remain compatible.
 
@@ -10,16 +10,22 @@ Versions 0.1–0.3 of this fork were released as unmuda. From 0.4.0 onward, the 
 
 This is a CLI application. A portable Windows build is available through [GitHub Releases](https://github.com/glebn2/balmunlock/releases): extract the ZIP and run `balmunlock.exe` from PowerShell. Python and dependencies are included. Fork changes were written with assistance from **GPT-6.1 Sol**.
 
+Language is automatic: Russian for a Russian locale, English otherwise. Windows
+uses the current user's display language; Linux uses `LC_ALL`, `LC_MESSAGES`,
+then `LANG`. `--lang ru` / `--lang en` overrides this for menus, guidance and
+help. Raw ADB/fastboot output and technical logs retain their original language.
+
 - [Compatibility](#compatibility)
 - [Windows](#windows)
 - [Linux](#linux)
+- [Install TWRP](#twrp)
 - [Backups and recovery](#recovery)
 - [Additional modes and diagnostics](#diagnostics)
 - [How the utility works](#limitations)
 - [Credits and license](#development)
 
 <a id="compatibility"></a>
-## Compatibility
+## Unlock compatibility
 
 | Parameter | Requirement |
 | --- | --- |
@@ -39,11 +45,11 @@ Successful unlocking, restoration of the original `chkcode` and Android boot hav
 
 ### Installation
 
-1. Download `balmunlock-v0.4.0-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/balmunlock/releases).
-2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools` and `tools` beside `balmunlock.exe`.
+1. Download the current `balmunlock-vVERSION-windows-x64.zip` and its `.sha256` file from [Releases](https://github.com/glebn2/balmunlock/releases). Version 0.5.0 includes the start menu and pinned TWRP.
+2. Extract the entire ZIP into a writable directory. Keep `_internal`, `platform-tools`, `tools` and `recovery` beside `balmunlock.exe`.
 3. Open PowerShell in that directory. No separate Python, PyUSB or Platform-Tools installation is needed.
 
-To check the archive hash, run `Get-FileHash .\balmunlock-v0.4.0-windows-x64.zip -Algorithm SHA256` and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
+To check the archive hash, run `Get-FileHash .\balmunlock-vVERSION-windows-x64.zip -Algorithm SHA256`, substituting the version, and compare it with the published `.sha256`. The EXE is not digitally signed. The EXE and its helpers have automated checks; refusal of an already unlocked bootloader was verified on a phone. A complete unlock using this packaged build remains unverified.
 
 Each phone gets a separate `sessions/device-.../` directory beside the EXE, regardless of PowerShell's current directory. It contains only that phone's backups and receipts; the selected path is printed. Retain the entire `sessions/` directory for recovery. Legacy 0.1/0.2 files beside the EXE are recognized and kept in place.
 
@@ -148,6 +154,56 @@ Tests without a phone:
 
 </details>
 
+<a id="twrp"></a>
+## Install TWRP
+
+A normal launch shows **1 — Unlock only**, **2 — TWRP only**, and
+**3 — Unlock + TWRP**. Use `--unlock`, `--install-recovery` or
+`--unlock-and-recovery` to select a workflow directly. Existing
+explicit modes and `--session` bypass the menu; `--recover` still restores the
+service partition after unlocking and does not uninstall TWRP.
+
+The combined workflow checks the pinned image and supported stock identity
+before unlocking can erase data, finishes the unlock/service-partition restore,
+then installs TWRP on the same serial. After a fresh unlock, complete Android
+setup and authorize USB debugging again, then confirm readiness in the same
+window. A declined, failed or incomplete unlock does not start installation.
+A recorded completed unlock or a live already-unlocked observation avoids a
+repeat unlock/wipe; the TWRP bootloader gates still run. If the window was
+closed, select option 3 again from stock Android with the unlock session retained.
+
+Automated TWRP installation currently admits only **stock A101BM, Android 12,
+1.280PO.0686.a, active slot b**, with an unlocked bootloader confirmed through
+fastboot. X01A and slot a are not admitted. Start from Android with authorized
+USB debugging; root, Magisk, DSU and a factory reset are not required. The pinned
+**TWRP 3.7.1_12-BALMUDA_Phone (20261024)** has been tested on A101BM including PIN
+decryption. A single `yes` authorizes the sequence; the first
+connection may require a fastboot driver and Keep Read Only on the TWRP screen.
+
+The installer verifies the pinned image, temporarily boots TWRP, backs up and
+verifies the previous recovery_b, flashes only recovery_b, verifies its SHA-256
+from the installed TWRP, and checks Android boot. If already installed, no repeat
+flash occurs. Logs, image, raw backup and state are retained in a fresh
+`recovery-sessions/device-…/<UTC>-<id>/`; existing unlock sessions are not changed.
+If recovery was already custom, the backup contains that custom recovery.
+Keep an independent copy of the directory.
+
+Full builds include the image in `recovery/` beside the EXE. Builds without it
+require the image from the [fixed TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.5.0/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip);
+see [artifact details](recovery/README.md). There are no downloads during installation.
+`--check-recovery-image` verifies it without ADB/USB. No unpinned downloads or
+images are accepted. Errors stop without an automatic retry, restore or slot
+switch. Keep the operation directory and determine the phone's actual state.
+
+For a source build, place the pinned image in `recovery/`, pass
+`--recovery-image PATH`, or use `--recovery-archive-url` to download the fixed
+release ZIP with both archive and image SHA-256 checks. `--recovery-url HTTPS_URL`
+still accepts the exact pinned raw image. An explicit `--without-recovery` builds
+without the binary. Push/PR CI uses that mode; the manual release workflow uses
+the fixed archive URL.
+The image was tested on hardware before integration. Host regression tests
+and frozen EXE checks do not establish a hardware trial of the new installer.
+
 <a id="linux"></a>
 ## Linux
 
@@ -162,7 +218,12 @@ python3 -m venv .venv
 python -m pip install -r tools/requirements.txt
 ```
 
-Configure your system's USB permissions/udev rules for DIAG VID `0482` and fastboot `18D1:D00D`. If `qcserial` holds DIAG, check its binding to the relevant interface. `shell.nix` is retained for Nix; this configuration has not been independently validated.
+Configure your system's USB permissions/udev rules for DIAG VID `0482` and fastboot `18D1:D00D`. If `qcserial` holds DIAG, check its binding to the relevant interface.
+
+Nix users can use `nix-shell`, then `bash unlock.sh`, instead of a venv.
+`shell.nix` provides Python/PyUSB, libusb, ADB/fastboot and diagnostic tools;
+it does not launch the workflow or configure USB permissions. `<nixpkgs>` is
+not pinned. This Nix environment has not been hardware-tested.
 
 ### Phone and launch
 
@@ -171,15 +232,17 @@ Enable developer options by tapping the build number in About phone, then enable
 In the activated environment, run:
 
 ```bash
-python tools/unlock.py --lang en
+bash unlock.sh
 ```
 
-Enter `yes`. The utility checks the phone and fastboot automatically, returns to Android, enables DIAG, saves backups and starts unlocking. On the screen, select **Unlock the bootloader** with the volume buttons and confirm as instructed; on the tested A101BM, use the power button. After `chkcode` restoration and reboot, wait for the Android welcome screen.
+Choose one of the three menu options. Unlocking requires `yes` and a physical
+confirmation on the phone; TWRP follows its separate admission and backup
+sequence. Use `bash unlock.sh --lang en` to force English.
 
 ### Continuing recovery
 
 ```bash
-python tools/unlock.py --recover --lang en
+bash unlock.sh --recover
 ```
 
 Retain original backups and receipts. This mode does not require PyUSB for fastboot recovery.
@@ -190,10 +253,13 @@ Retain original backups and receipts. This mode does not require PyUSB for fastb
 Check dependencies without a phone:
 
 ```bash
-python tools/unlock.py --preflight --lang en
+bash unlock.sh --preflight
 ```
 
-The Bash entry points `bash unlock.sh` and `bash unlock.en.sh` are retained; they use the same controller.
+`unlock.sh` is the main Linux entry point, forwarding arguments to
+`python3 -X utf8 tools/unlock.py`. `unlock.en.sh` remains an English-selected
+compatibility entry point. Direct Python invocation is equivalent; Bash does
+not contain a second unlock implementation.
 
 For direct low-level calls, set `ANDROID_SERIAL` to the original phone. If DIAG must be re-enabled, use `tools/cve31317.py`, then `tools/kdiag_shell.py "setprop vendor.kc.diag.status start"`. The main workflow enables DIAG and checks the service automatically.
 

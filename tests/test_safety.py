@@ -640,7 +640,7 @@ class RecoveryTests(WorkflowFixture):
     def test_cli_error_automatically_invokes_recovery_and_reports_failure(self):
         self.host.fail_at = "unlock_chkcode.py"
         self.host.adb_online = True
-        with patch.object(sys, "argv", ["unlock"]), patch("builtins.input", return_value="yes"), \
+        with patch.object(sys, "argv", ["unlock", "--unlock"]), patch("builtins.input", return_value="yes"), \
                 patch.object(unlock, "preflight", return_value=True):
             self.assertEqual(unlock.main(), 1)
         self.assertTrue(any(Path(args[1]).name == "restore_chkcode.py"
@@ -649,7 +649,7 @@ class RecoveryTests(WorkflowFixture):
 
     def test_cli_error_before_marker_does_not_start_recovery(self):
         self.host.fail_at = "cve31317.py"
-        with patch.object(sys, "argv", ["unlock"]), patch("builtins.input", return_value="yes"), \
+        with patch.object(sys, "argv", ["unlock", "--unlock"]), patch("builtins.input", return_value="yes"), \
                 patch.object(unlock, "preflight", return_value=True):
             self.assertEqual(unlock.main(), 1)
         self.assertFalse(any(args[-1] == "get-state" for args, _ in self.host.calls))
@@ -662,7 +662,7 @@ class RecoveryTests(WorkflowFixture):
             if name == "unlock_chkcode.py":
                 signal.raise_signal(signal.SIGINT)
         self.host.on_write = cancel
-        with patch.object(sys, "argv", ["unlock"]), patch("builtins.input", return_value="yes"), \
+        with patch.object(sys, "argv", ["unlock", "--unlock"]), patch("builtins.input", return_value="yes"), \
                 patch.object(unlock, "preflight", return_value=True):
             self.assertEqual(unlock.main(), 1)
         state = json.loads(self.flow.receipt.read_text())
@@ -679,7 +679,7 @@ class RecoveryTests(WorkflowFixture):
                 signal.raise_signal(signal.SIGTERM)
         self.host.on_write = cancel
         previous = signal.getsignal(signal.SIGTERM)
-        with patch.object(sys, "argv", ["unlock"]), patch("builtins.input", return_value="yes"), \
+        with patch.object(sys, "argv", ["unlock", "--unlock"]), patch("builtins.input", return_value="yes"), \
                 patch.object(unlock, "preflight", return_value=True):
             self.assertEqual(unlock.main(), 1)
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous)

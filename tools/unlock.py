@@ -26,12 +26,15 @@ from operation_signals import OperationSignals
 from session_lock import session_lock
 from session_store import SessionStore, valid_serial
 from runtime_paths import APP_NAME, VERSION, frozen, session_root, tool_command
+from ui_language import default_language, error_message
 
 ROOT = session_root()
 
 
 def recovery_command():
-    return ".\\balmunlock.exe --recover" if frozen() else "python tools/unlock.py --recover"
+    if frozen():
+        return ".\\balmunlock.exe --recover"
+    return "python tools/unlock.py --recover" if os.name == "nt" else "bash unlock.sh --recover"
 
 
 class Stop(RuntimeError):
@@ -96,6 +99,8 @@ class Workflow:
         self.receipt = self.root / "chkcode_backup.device.json"
         self.marker_possible = False
         self.marker_verified = False
+        self.already_unlocked_observed = False
+        self.unlocked_this_run = False
         self.original = None
         self.state = {}
         self.signals = OperationSignals(lang)
@@ -130,12 +135,9 @@ class Workflow:
 
     def show_error(self, error):
         self.detail(f"ERROR {type(error).__name__}: {error}")
-        message = getattr(error, "ru", None) if self.lang == "ru" else None
         label = "Причина" if self.lang == "ru" else "Reason"
-        lines = str(error).splitlines()
-        fallback = "Операция прервана." if self.lang == "ru" else "Operation interrupted."
-        print(f"{label}: {message or (lines[0] if lines else fallback)}", file=sys.stderr, flush=True)
-        if self.verbose and message:
+        print(f"{label}: {error_message(error, self.lang)}", file=sys.stderr, flush=True)
+        if self.verbose:
             print(str(error), file=sys.stderr, flush=True)
 
     def phase_label(self, phase):
@@ -845,6 +847,7 @@ class Workflow:
         self.save_state("unlock_requested")
         self.fastboot("flashing", "unlock", timeout=180)
         self.wait_unlocked()
+        self.unlocked_this_run = True
         self.save_state("unlock_verified")
         self.say("Разблокировка подтверждена. Восстанавливаю исходный служебный раздел; не отключайте USB.",
                  "Unlock confirmed. Restoring the original service partition; keep USB connected.")
@@ -1046,6 +1049,7 @@ class Workflow:
                 self.execute(prepare_only=args.prepare)
                 return 0
             except AlreadyUnlocked:
+                self.already_unlocked_observed = True
                 self.say("Загрузчик уже разблокирован. Запись метки и повторный анлок не нужны; "
                          "проверьте возврат телефона в Android.",
                          "The bootloader is already unlocked. No marker or repeat unlock is needed; "
@@ -1112,14 +1116,20 @@ class Workflow:
 
 def main():
     language = argparse.ArgumentParser(add_help=False, prog=APP_NAME)
-    language.add_argument("--lang", choices=("ru", "en"), default="ru")
+    language.add_argument("--lang", choices=("ru", "en"), default=default_language())
     selected_language, _ = language.parse_known_args()
     def help_text(ru, en):
         return ru if selected_language.lang == "ru" else en
-    parser = argparse.ArgumentParser(prog=APP_NAME, description=help_text(
-        "Пошаговая разблокировка загрузчика BALMUDA Phone. Обычный запуск сам выбирает сеанс телефона.",
-        "Guided BALMUDA Phone bootloader unlocking. A normal launch selects the phone's session automatically."))
-    parser.add_argument("--lang", choices=("ru", "en"), default="ru", help=help_text("язык сообщений и справки", "message and help language"))
+    class HelpFormatter(argparse.HelpFormatter):
+        def add_usage(self, usage, actions, groups, prefix=None):
+            return super().add_usage(usage, actions, groups,
+                                     prefix or help_text("использование: ", "usage: "))
+    parser = argparse.ArgumentParser(prog=APP_NAME, add_help=False, formatter_class=HelpFormatter, description=help_text(
+        "BALMUDA Phone: разблокировка загрузчика и установка TWRP. Обычный запуск открывает меню.",
+        "BALMUDA Phone bootloader unlock and TWRP installation. A normal launch opens the menu."))
+    parser._optionals.title = help_text("параметры", "options")
+    parser.add_argument("-h", "--help", action="help", help=help_text("показать справку и выйти", "show this help message and exit"))
+    parser.add_argument("--lang", choices=("ru", "en"), default=selected_language.lang, help=help_text("язык сообщений и справки (по умолчанию — язык системы: RU или EN)", "message and help language (default: system language, RU or EN)"))
     parser.add_argument("--version", action="version", version=f"{APP_NAME} {VERSION}")
     parser.add_argument("--verbose", action="store_true", help=help_text(
         "показывать технические подробности в консоли; они также сохраняются в balmunlock.log",
@@ -1129,12 +1139,59 @@ def main():
     interaction.add_argument("--non-interactive", action="store_true", help=help_text("при ошибке завершать работу без предложения повторить", "stop on errors instead of offering guided retries"))
     parser.add_argument("--session", metavar="SERIAL_OR_KEY", help=help_text("выбрать сохранённый сеанс; legacy — старые файлы рядом с программой", "select a saved session; legacy selects older files beside the program"))
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--unlock", action="store_true", help=help_text("перейти к разблокировке без стартового меню", "open the unlock workflow without the start menu"))
+    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить проверенный TWRP на уже разблокированный A101BM 1.280, слот b", "install the pinned TWRP on an already unlocked A101BM 1.280, slot b"))
+    mode.add_argument("--unlock-and-recovery", action="store_true", help=help_text("разблокировать загрузчик, затем установить TWRP на тот же телефон", "unlock the bootloader, then install TWRP on the same phone"))
+    mode.add_argument("--check-recovery-image", action="store_true", help=help_text("проверить образ TWRP на ПК, без ADB/USB", "verify the TWRP image on the host, without ADB/USB"))
+    parser.add_argument("--recovery-image", type=Path, help=help_text("путь к образу TWRP; SHA-256 должен совпасть с закреплённым", "TWRP image path; must match the pinned SHA-256"))
     mode.add_argument("--preflight", action="store_true", help=help_text("подробно проверить зависимости на ПК, без ADB/USB", "detailed host checks only; no ADB/USB"))
     mode.add_argument("--recover", action="store_true", help=help_text("продолжить восстановление исходного раздела без нового анлока", "resume recovery of the original partition without a new unlock"))
     mode.add_argument("--prepare", action="store_true", help=help_text("подготовить DIAG и бэкапы, без метки и анлока", "prepare DIAG and backups without a marker or unlock"))
     mode.add_argument("--unlock-prepared", action="store_true", help=help_text("начать анлок из сохранённой подготовки; стирает данные", "START UNLOCK from saved preparation; erases user data"))
     mode.add_argument("--list-sessions", action="store_true", help=help_text("показать сохранённые сеансы без ADB/USB", "list saved sessions without ADB/USB access"))
     args = parser.parse_args()
+    if args.recovery_image and not (args.install_recovery or args.unlock_and_recovery or args.check_recovery_image):
+        parser.error(help_text("--recovery-image требует --install-recovery, --unlock-and-recovery или --check-recovery-image",
+                               "--recovery-image requires --install-recovery, --unlock-and-recovery or --check-recovery-image"))
+    if args.check_recovery_image:
+        from recovery_image import IMAGE_SHA256, image_path, verify_image
+        try:
+            path = verify_image(image_path(ROOT, args.recovery_image))
+            print(f"TWRP: {path}\nSHA-256: {IMAGE_SHA256}\n" + help_text("OK (проверка на ПК)", "OK (offline)"))
+            return 0
+        except (OSError, ValueError) as error:
+            print(error_message(error, args.lang), file=sys.stderr)
+            if args.verbose:
+                print(str(error), file=sys.stderr)
+            return 1
+    explicit_mode = any((args.unlock, args.install_recovery, args.unlock_and_recovery, args.preflight, args.recover,
+                         args.prepare, args.unlock_prepared, args.list_sessions, args.session))
+    if not explicit_mode:
+        print(f"{APP_NAME} {VERSION}")
+        print(help_text("1. Только разблокировка загрузчика\n2. Только TWRP (нужен разблокированный загрузчик)\n3. Разблокировка + TWRP\nEnter — выход",
+                        "1. Unlock bootloader only\n2. TWRP only (unlocked bootloader required)\n3. Unlock + TWRP\nEnter to exit"))
+        try:
+            while True:
+                choice = input("> ").strip()
+                if choice in ("", "0"):
+                    return 0
+                if choice in ("1", "2", "3"):
+                    args.install_recovery = choice == "2"
+                    args.unlock_and_recovery = choice == "3"
+                    break
+                print(help_text("Введите 1, 2, 3 или нажмите Enter.", "Enter 1, 2, 3, or press Enter."))
+        except (EOFError, KeyboardInterrupt):
+            return 0
+    if args.install_recovery:
+        if args.session:
+            parser.error(help_text("--session относится к сеансам анлока, а не установке TWRP",
+                                   "--session is only used for unlock recovery, not TWRP installation"))
+        from recovery_install import install
+        return install(ROOT, args.lang, interactive=not args.non_interactive,
+                       verbose=args.verbose, image=args.recovery_image)
+    if args.unlock_and_recovery:
+        from combined_workflow import combined
+        return combined(ROOT, args, Workflow, banner_shown=not explicit_mode)
     if args.preflight:
         return 0 if preflight(args.lang) else 1
     if args.list_sessions:
@@ -1152,6 +1209,7 @@ def main():
             print(f"STOP: {error}", file=sys.stderr)
             return 1
     flow = Workflow(args.lang, interactive=not args.non_interactive and (args.guided or sys.stdin.isatty()), verbose=args.verbose)
+    flow.introduced = not explicit_mode
     flow.introduce()
     if flow.interactive:
         try:
