@@ -39,9 +39,9 @@ Unlock requirements:
 | Security patch level | Earlier than 2024-06-01 |
 | Connection | One phone and a working data-capable USB cable |
 
-The utility checks the model, firmware and connection automatically. For TWRP
-installation, use the latest stock Android 12: **1.280PO.0686.a** for A101BM
-or **1.280MI.0648.a** for X01A.
+The utility checks the model and connection automatically. The Android 12
+requirement applies to bootloader unlocking. TWRP can also be installed or
+updated from LineageOS and other custom Android ROMs on an unlocked phone.
 
 Unlocking, service-partition restoration and Android boot were checked on A101BM
 1.280PO. TWRP supports /data decryption, ADB/MTP, ZIP/sideload installation,
@@ -175,12 +175,9 @@ Option **3** unlocks the bootloader, then installs TWRP. After the reset,
 complete Android setup and authorize USB debugging again; the utility waits
 for your confirmation. An already unlocked phone is not wiped again.
 
-Both models are supported on stock Android 12:
-
-| Model | Firmware |
-| --- | --- |
-| A101BM | `1.280PO.0686.a` |
-| X01A | `1.280MI.0648.a` |
+Both **A101BM and X01A** are supported on stock Android and custom ROMs,
+including LineageOS. Android version and system fingerprint do not restrict
+recovery installation.
 
 Use an unlocked bootloader with active slot **b**. Connect the phone from running
 Android with USB debugging authorized and select **2 — TWRP only**.
@@ -191,9 +188,11 @@ The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261025)**. Root, Magisk,
 GSI, another unlock and a factory reset are not required to install it.
 
 The installer temporarily boots TWRP, backs up recovery_b to the PC, verifies
-the backup, flashes recovery_b and checks the partition hash. It then returns
-the phone to Android. Boot, vbmeta and the other slot are left as they are.
+the backup, flashes recovery_b and checks the partition hash. The utility then
+finishes with the phone in TWRP. Choose Reboot → System to boot Android.
+Boot, vbmeta and the other slot are left as they are.
 An already installed identical TWRP is not flashed again.
+Installation and updates through the utility were also tested on A101BM running LineageOS / Android 17.
 
 Backups and logs are saved under `recovery-sessions/device-…/<UTC>-<id>/`.
 Keep a separate copy. When updating TWRP, the backup contains the previous

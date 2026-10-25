@@ -711,7 +711,7 @@ class DevicePolicyTests(unittest.TestCase):
                     "ro.build.version.security_patch": "2022-10-01"}
         for key, values in {
             "ro.product.model": ("", "KYOCERA", "A101BM-other"),
-            "ro.build.version.sdk": ("", "32", "36"),
+            "ro.build.version.sdk": ("", "32", "36", "37"),
             "ro.build.version.incremental": ("", "1.219", "1.281", "2.280", "1.280-custom", "1.2800"),
             "ro.build.version.security_patch": ("", "unknown", "20221001", "2022-02-30", "2024-06-01", "2026-10-01"),
         }.items():

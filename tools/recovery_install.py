@@ -52,8 +52,10 @@ class RecoveryInstaller:
         self.root = Path(root).resolve()
         self.lang, self.interactive, self.verbose = lang, interactive, verbose
         self.serial = None
-        self.stock_model = None
-        self.stock_build = None
+        self.device_model = None
+        self.android_build = None
+        self.android_details = {}
+        self.is_stock = False
         self.image_hash = None
         self.source_name = None
         self.folder = None
@@ -107,7 +109,7 @@ class RecoveryInstaller:
     def fb(self, *args, **kwargs):
         return self.run(["fastboot", "-s", self.serial, *args], **kwargs)
 
-    def connections(self):
+    def connections(self, waiting=False):
         found = {}
         for program in ("adb", "fastboot"):
             output = self.run([program, "devices"], timeout=10).stdout
@@ -115,6 +117,17 @@ class RecoveryInstaller:
                 if not line.strip() or line.startswith(("List of devices", "*")):
                     continue
                 fields = line.split()
+                # Windows fastboot may still enumerate an unaddressable USB
+                # handle while the selected phone switches to recovery.
+                if (program == "fastboot" and len(fields) == 2
+                        and fields[1] == "fastboot" and re.fullmatch(r"\?+", fields[0])):
+                    if not waiting or self.serial is None:
+                        self.fail("Fastboot пока не прочитал серийный номер устройства. "
+                                  "Дождитесь подключения Android и повторите запуск.",
+                                  "Fastboot cannot read the device serial yet. "
+                                  "Wait for Android to connect and start again.")
+                    self.log("Waiting for USB re-enumeration; unidentified fastboot handle is not a device identity.")
+                    continue
                 if len(fields) < 2 or not valid_serial(fields[0]):
                     self.fail("Не удалось разобрать список устройств.", "Invalid device-list response.")
                 found.setdefault(fields[0], set()).add(fields[1])
@@ -126,7 +139,7 @@ class RecoveryInstaller:
     def wait(self, mode, timeout):
         deadline = time.monotonic() + timeout
         while True:
-            found = self.connections()
+            found = self.connections(waiting=True)
             if found.get(self.serial) == {mode}:
                 return
             if time.monotonic() >= deadline:
@@ -137,20 +150,41 @@ class RecoveryInstaller:
     def properties(self):
         return parse_properties(self.adb("shell", "getprop").stdout)
 
-    def android_identity(self):
+    def android_identity(self, require_stock=False):
         props = self.properties()
-        model = props.get("ro.product.model")
+        # Custom ROM branding and SDK do not identify the physical device.
+        model = (props.get("ro.product.vendor.device") or props.get("ro.product.vendor.model")
+                 or props.get("ro.product.device") or props.get("ro.product.model"))
         if model not in STOCK_IDENTITIES:
             self.fail("Нужен BALMUDA Phone A101BM или X01A.", "BALMUDA Phone A101BM or X01A required.")
-        if self.stock_model is not None and model != self.stock_model:
+        platform = props.get("ro.board.platform") or props.get("ro.product.board")
+        if platform != "lito":
+            self.fail("Не подтверждена платформа BALMUDA Phone (lito).", "BALMUDA Phone platform (lito) not confirmed.")
+        if self.device_model is not None and model != self.device_model:
             self.fail("Модель телефона изменилась в ходе установки.", "Phone model changed during installation.")
-        expected = {**STOCK_IDENTITIES[model], "ro.boot.serialno": self.serial, "ro.boot.slot_suffix": "_b"}
-        for key, value in expected.items():
+        for key, value in {"ro.boot.serialno": self.serial, "ro.boot.slot_suffix": "_b"}.items():
             if props.get(key) != value:
-                self.fail(f"Не подходит {key}: {props.get(key)!r}. Нужен штатный {model} 1.280, слот b.",
-                          f"Identity mismatch for {key}: {props.get(key)!r}. Requires stock {model} 1.280, slot b.")
-        self.stock_model = model
-        self.stock_build = expected["ro.build.version.incremental"]
+                self.fail(f"Не совпадает {key}: {props.get(key)!r}.",
+                          f"Device identity mismatch for {key}: {props.get(key)!r}.")
+        is_stock = all(props.get(key) == value for key, value in STOCK_IDENTITIES[model].items())
+        if require_stock and not is_stock:
+            self.fail("Для разблокировки нужен штатный Android 12 / 1.280. "
+                      "Для установки TWRP на кастомном Android выберите пункт 2.",
+                      "Unlocking requires stock Android 12 / 1.280. "
+                      "Select option 2 to install TWRP on custom Android.")
+        self.device_model = model
+        self.android_build = props.get("ro.build.version.incremental", "")
+        self.is_stock = is_stock
+        self.android_details = {
+            "model": model, "system_model": props.get("ro.product.model", ""),
+            "vendor_model": props.get("ro.product.vendor.model", ""),
+            "vendor_device": props.get("ro.product.vendor.device", ""),
+            "android_release": props.get("ro.build.version.release", ""),
+            "android_sdk": props.get("ro.build.version.sdk", ""),
+            "android_build": self.android_build,
+            "android_fingerprint": props.get("ro.build.fingerprint", ""),
+            "vendor_fingerprint": props.get("ro.vendor.build.fingerprint", ""),
+        }
         return props
 
     def clean_unlock_session(self):
@@ -264,22 +298,23 @@ class RecoveryInstaller:
         self.save("confirmed", image_sha256=self.image_hash, image_bytes=IMAGE_SIZE,
                   source_filename=self.source_name, image_file="recovery.img",
                   bundled_image=(self.image_hash == IMAGE_SHA256),
-                  partition=PARTITION, stock_model=self.stock_model, stock_build=self.stock_build)
+                  partition=PARTITION, **self.android_details,
+                  **({"stock_model": self.device_model, "stock_build": self.android_build} if self.is_stock else {}))
 
-    def select_android(self):
+    def select_android(self, require_stock=False):
         """Read-only admission, also used before the combined workflow can wipe."""
         if any(shutil.which(tool) is None for tool in ("adb", "fastboot")):
             self.fail("Не найдены ADB/fastboot. Проверьте файлы программы.", "ADB/fastboot not found. Check the app files.")
         found = self.connections()
         if len(found) != 1 or next(iter(found.values())) != {"device"}:
-            self.fail("Начните из штатного Android с разрешённой отладкой по USB.",
-                      "Start from stock Android with authorized USB debugging.")
+            self.fail("Начните из работающего Android с разрешённой отладкой по USB.",
+                      "Start from running Android with authorized USB debugging.")
         self.serial = next(iter(found))
         if self.env.get("ANDROID_SERIAL") not in (None, "", self.serial):
             self.fail("ANDROID_SERIAL указывает на другой телефон.", "ANDROID_SERIAL selects another phone.")
         self.env["ANDROID_SERIAL"] = self.serial
-        if self.android_identity().get("sys.boot_completed") != "1":
-            self.fail("Дождитесь полной загрузки штатного Android.", "Wait for stock Android to finish booting.")
+        if self.android_identity(require_stock=require_stock).get("sys.boot_completed") != "1":
+            self.fail("Дождитесь полной загрузки Android.", "Wait for Android to finish booting.")
 
     def execute(self, override=None, expected_sha256=None):
         # No device discovery before the artifact passes its offline checks.
@@ -302,9 +337,10 @@ class RecoveryInstaller:
                      "Подтверждение ниже разрешает установку выбранного файла.",
                      "Warning: this image differs from the bundled TWRP. "
                      "Confirmation below authorizes installing the selected file.")
-        self.say(f"Установка TWRP: {self.stock_model} {self.stock_build}, слот b. Сохраню текущий recovery на ПК, затем заменю только recovery_b. "
+        android_label = self.android_details["android_release"] or "SDK " + self.android_details["android_sdk"]
+        self.say(f"Установка TWRP: {self.device_model}, Android {android_label}, слот b. Сохраню текущий recovery на ПК, затем заменю только recovery_b. "
                  "Сохраните важные данные отдельно. Продолжить? [yes/N]",
-                 f"Install TWRP: {self.stock_model} {self.stock_build}, slot b. Back up the current recovery, then replace recovery_b only. "
+                 f"Install TWRP: {self.device_model}, Android {android_label}, slot b. Back up the current recovery, then replace recovery_b only. "
                  "Keep a separate copy of important data. Continue? [yes/N]")
         if input().strip().lower() != "yes":
             return 0
@@ -349,18 +385,11 @@ class RecoveryInstaller:
             self.fail("Хеш recovery_b после установки не совпал. Не продолжайте установку.",
                       "Installed recovery_b hash mismatch. Stop here.")
         self.save("partition_verified", installed_sha256=self.image_hash)
-        self.say("Раздел проверен. Проверяю возврат в Android...", "Partition verified. Checking Android return...")
-        self.adb("reboot")
-        self.wait("device", 180)
-        deadline = time.monotonic() + 180
-        while self.android_identity().get("sys.boot_completed") != "1":
-            if time.monotonic() >= deadline:
-                self.fail("Возврат Android не подтверждён. Бэкап и журнал сохранены.",
-                          "Android return not confirmed. Backup and log retained.")
-            time.sleep(2)
-        self.save("completed", android_boot_completed=True)
-        self.say("TWRP установлен и проверен. Телефон вернулся в Android. Бэкап recovery сохранён.",
-                 "TWRP installed and verified. Phone returned to Android. Recovery backup retained.")
+        self.save("completed", final_mode="recovery", recovery_ready=True)
+        self.say("Recovery проверен. Телефон остаётся в TWRP. "
+                 "Для загрузки Android выберите Reboot → System. Бэкап recovery сохранён.",
+                 "Recovery verified. Phone remains in TWRP. "
+                 "Choose Reboot -> System to boot Android. Recovery backup retained.")
         return 0
 
 

@@ -119,9 +119,14 @@ class FakeDevice:
         self.now = 0
         self.fallback = False
         self.unlocked_conflict = False
+        self.usb_transition_after_boot = 0
+        self.usb_transition_polls = 0
+        self.android_reboot_mode = "device"
         self.props = {"ro.boot.serialno": "SERIAL", "ro.product.model": "A101BM",
-                      "ro.product.vendor.model": "A101BM", "ro.boot.slot_suffix": "_b",
+                      "ro.product.vendor.model": "A101BM", "ro.product.vendor.device": "A101BM",
+                      "ro.board.platform": "lito", "ro.boot.slot_suffix": "_b",
                       "ro.build.version.sdk": "31", "ro.build.version.incremental": artifact.STOCK_BUILD,
+                      "ro.build.version.release": "12",
                       "ro.build.fingerprint": artifact.STOCK_FINGERPRINT,
                       "ro.vendor.build.fingerprint": artifact.VENDOR_FINGERPRINT, "sys.boot_completed": "1",
                       "ro.build.version.security_patch": "2023-09-01"}
@@ -132,9 +137,21 @@ class FakeDevice:
     def use_x01a(self):
         # Recorded stock X01A getprop; keep independent of the production profile.
         self.props.update({"ro.product.model": "X01A", "ro.product.vendor.model": "X01A",
+                           "ro.product.vendor.device": "X01A",
                            "ro.build.version.incremental": "1.280MI.0648.a",
                            "ro.build.fingerprint": "BALMUDA/X01A/X01A:12/SKQ1.220303.001/1.280MI.0648.a:user/release-keys",
                            "ro.vendor.build.fingerprint": "BALMUDA/X01A/X01A:11/RKQ1.220301.001/1.280MI.0648.a:user/release-keys"})
+
+    def use_lineage(self, model="A101BM", vendor="A101BM"):
+        # Values from the 20261025 Lineage target-files: SDK 37 in system and vendor.
+        self.props.update({"ro.product.model": model, "ro.product.vendor.model": vendor,
+                           "ro.product.vendor.device": vendor, "ro.board.platform": "lito",
+                           "ro.build.version.sdk": "37", "ro.build.version.release": "17",
+                           "ro.build.version.incremental": "1792927504",
+                           "ro.build.fingerprint": "BALMUDA/A101BM/A101BM:12/SKQ1.220303.001/1.280PO.0686.a:user/release-keys",
+                           "ro.vendor.build.fingerprint": "BALMUDA/A101BM/A101BM:12/SKQ1.220303.001/1.280PO.0686.a:user/release-keys",
+                           "ro.vendor.build.version.sdk": "37",
+                           "ro.vendor.build.version.incremental": "1792927504"})
 
     def run(self, args, **kwargs):
         args = list(map(str, args))
@@ -142,12 +159,15 @@ class FakeDevice:
         out, err, rc = "", "", 0
         if args == ["adb", "devices"]:
             out = "List of devices attached\n"
-            if self.mode != "fastboot":
+            if self.mode != "fastboot" and not self.usb_transition_polls:
                 out += f"{'OTHER' if self.other_serial else 'SERIAL'}\t{self.mode}\n"
             if self.extra:
                 out += "SECOND\tunauthorized\n"
         elif args == ["fastboot", "devices"]:
-            if self.mode == "fastboot":
+            if self.usb_transition_polls:
+                self.usb_transition_polls -= 1
+                out = "????????????\t fastboot\n"
+            elif self.mode == "fastboot":
                 out = f"{'OTHER' if self.other_serial else 'SERIAL'}\tfastboot\n"
         else:
             assert args[1:3] == ["-s", "SERIAL"], args
@@ -172,6 +192,7 @@ class FakeDevice:
                         rc = 1
                     else:
                         self.mode = "recovery"
+                        self.usb_transition_polls = self.usb_transition_after_boot
                 elif command[0] == "flash":
                     assert command[1] == "recovery_b", args
                     if self.cancel_flash:
@@ -195,7 +216,7 @@ class FakeDevice:
             elif command == ["reboot", "bootloader"]:
                 self.mode = "fastboot"
             elif command == ["reboot"]:
-                self.mode = "device"
+                self.mode = self.android_reboot_mode
             elif command == ["shell", "id", "-u"]:
                 out = "0\n"
             elif command == ["shell", "blockdev", "--getsize64", recovery.BLOCK]:
@@ -256,14 +277,17 @@ class RecoveryTests(unittest.TestCase):
     def reboots(self):
         return [args for args, _ in self.host.calls if "reboot" in args]
 
-    def test_full_install_backs_up_original_and_verifies_android_without_unlock_helpers(self):
+    def test_full_install_backs_up_original_and_finishes_in_recovery_without_unlock_helpers(self):
         original = self.host.partition
         self.assertEqual(self.flow.execute(), 0)
         state = json.loads((self.flow.folder / "state.json").read_text())
         self.assertEqual(state["phase"], "completed")
         self.assertEqual((self.flow.folder / state["backup"]).read_bytes(), original)
         self.assertEqual(state["original_sha256"], hashlib.sha256(original).hexdigest())
-        self.assertEqual(self.host.mode, "device")
+        self.assertEqual(self.host.mode, "recovery")
+        self.assertEqual(state["final_mode"], "recovery")
+        self.assertTrue(state["recovery_ready"])
+        self.assertNotIn("android_boot_completed", state)
         self.assertEqual(self.host.partition, self.data)
         self.assertEqual(len(self.writes()), 1)
         args, options = self.writes()[0]
@@ -343,10 +367,10 @@ class RecoveryTests(unittest.TestCase):
             self.flow.execute()
         self.assertFalse(self.host.calls)
 
-    def test_other_model_build_vendor_and_slot_refuse_before_reboot(self):
-        for key, value in (("ro.product.model", "OTHER"), ("ro.boot.slot_suffix", "_a"),
-                           ("ro.build.version.incremental", "1.270PO.0682.a"),
-                           ("ro.vendor.build.fingerprint", "other"), ("sys.boot_completed", "0")):
+    def test_other_device_platform_serial_and_slot_refuse_before_reboot(self):
+        for key, value in (("ro.product.vendor.device", "OTHER"), ("ro.boot.slot_suffix", "_a"),
+                           ("ro.board.platform", "other"), ("ro.boot.serialno", "OTHER"),
+                           ("sys.boot_completed", "0")):
             before = self.host.props[key]
             self.host.props[key] = value
             with self.assertRaises(recovery.RecoveryError):
@@ -368,27 +392,100 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.writes()[0][0][3:5], ["flash", "recovery_b"])
         self.assertFalse(any("flashing" in args or "su" in args for args, _ in self.host.calls))
 
-    def test_x01a_rejects_cross_model_build_and_fingerprints_before_reboot(self):
-        self.host.use_x01a()
-        for key, value in (("ro.product.vendor.model", "A101BM"),
-                           ("ro.build.version.incremental", "1.280PO.0686.a"),
-                           ("ro.build.fingerprint", artifact.STOCK_FINGERPRINT),
-                           ("ro.vendor.build.fingerprint", artifact.VENDOR_FINGERPRINT)):
-            with self.subTest(key=key):
-                original = self.host.props[key]
-                self.host.props[key] = value
-                with self.assertRaises(recovery.RecoveryError):
-                    self.flow.execute()
-                self.host.props[key] = original
-        self.assertFalse(self.reboots())
-        self.assertFalse(self.writes())
+    def test_lineage_sdk37_installs_and_finishes_in_recovery(self):
+        self.host.use_lineage()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertIn("Android 17", output.getvalue())
+        self.assertEqual(self.flow.state["phase"], "completed")
+        self.assertEqual(self.flow.state["model"], "A101BM")
+        self.assertEqual(self.flow.state["android_sdk"], "37")
+        self.assertEqual(self.flow.state["android_build"], "1792927504")
+        self.assertNotIn("stock_build", self.flow.state)
+        self.assertEqual(len(self.writes()), 1)
+        self.assertFalse(any("flashing" in args or "chkcode" in args for args, _ in self.host.calls))
 
-    def test_model_is_bound_across_the_android_return(self):
+    def test_lineage_accepts_a101bm_system_label_with_x01a_vendor(self):
+        self.host.use_lineage(model="A101BM", vendor="X01A")
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.flow.state["model"], "X01A")
+        self.assertEqual(self.flow.state["system_model"], "A101BM")
+        self.assertEqual(self.flow.state["vendor_model"], "X01A")
+        self.assertEqual(self.flow.state["android_sdk"], "37")
+        self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_custom_rom_branding_is_not_used_as_a_hardware_model(self):
+        self.host.use_lineage(model="BALMUDA Phone", vendor="A101BM")
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.flow.state["model"], "A101BM")
+        self.assertEqual(self.flow.state["system_model"], "BALMUDA Phone")
+
+    def test_lineage_update_of_already_installed_image_skips_flash(self):
+        self.host.use_lineage()
+        self.host.partition = self.data
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertFalse(self.writes())
+        self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_english_lineage_matching_image_finishes_with_english_instructions(self):
+        self.host.use_lineage()
+        self.host.partition = self.data
+        self.flow.lang = "en"
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(self.flow.execute(), 0)
+        text = output.getvalue()
+        self.assertIn("Android 17", text)
+        self.assertIn("This TWRP is already installed; no repeat flash.", text)
+        self.assertIn("Phone remains in TWRP", text)
+        self.assertIn("Choose Reboot -> System", text)
+        self.assertNotRegex(text, r"[\u0400-\u04ff]")
+        self.assertFalse(self.writes())
+        self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_english_lineage_other_image_warning_and_completion_are_localized(self):
+        self.host.use_lineage()
+        self.host.partition = self.data
+        self.data = b"different-build!" * 256
+        self.image.write_bytes(self.data)
+        self.flow.lang = "en"
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(self.flow.execute(), 0)
+        text = output.getvalue()
+        self.assertIn("Warning: this image differs from the bundled TWRP.", text)
+        self.assertIn("Original backed up. Writing recovery_b", text)
+        self.assertIn("Phone remains in TWRP", text)
+        self.assertIn("Choose Reboot -> System", text)
+        self.assertNotRegex(text, r"[\u0400-\u04ff]")
+        self.assertEqual(len(self.writes()), 1)
+        self.assertEqual(self.flow.state["phase"], "completed")
+        self.assertEqual(self.flow.state["installed_sha256"], hashlib.sha256(self.data).hexdigest())
+
+    def test_model_remains_bound_across_identity_checks(self):
         self.flow.select_android()
         self.host.use_x01a()
         with self.assertRaisesRegex(recovery.RecoveryError, "model changed"):
             self.flow.android_identity()
         self.assertFalse(self.writes())
+
+    def test_matching_image_finishes_without_attempting_android_reboot(self):
+        self.host.partition = self.data
+        self.host.android_reboot_mode = "recovery"  # Recorded hardware behavior.
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.host.mode, "recovery")
+        self.assertEqual(self.flow.state["phase"], "completed")
+        self.assertEqual(self.flow.state["final_mode"], "recovery")
+        self.assertFalse(self.writes())
+        self.assertFalse(any(args[0] == "adb" and args[3:] == ["reboot"] for args, _ in self.host.calls))
+
+    def test_different_image_finishes_in_recovery_after_verified_flash(self):
+        self.host.android_reboot_mode = "recovery"  # Would make the old Android wait time out.
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.host.mode, "recovery")
+        self.assertEqual(self.flow.state["phase"], "completed")
+        self.assertEqual(self.flow.state["final_mode"], "recovery")
+        self.assertEqual(self.flow.state["installed_sha256"], hashlib.sha256(self.data).hexdigest())
+        self.assertEqual(len(self.writes()), 1)
+        self.assertFalse(any(args[0] == "adb" and args[3:] == ["reboot"] for args, _ in self.host.calls))
 
     def test_other_selected_serial_multiple_and_unauthorized_devices_refuse(self):
         self.host.extra = True
@@ -500,6 +597,7 @@ class RecoveryTests(unittest.TestCase):
         self.flow.execute()
         first = self.flow.folder
         before = (first / "state.json").read_bytes()
+        self.host.mode = "device"  # The user returns to Android before the next run.
         self.flow.execute()
         self.assertNotEqual(first, self.flow.folder)
         self.assertEqual((first / "state.json").read_bytes(), before)
@@ -562,6 +660,75 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(recovery.subprocess, "run", side_effect=disappears), self.assertRaises(recovery.RecoveryError):
             self.flow.execute()
         self.assertGreaterEqual(self.host.now, 120)
+        self.assertFalse(self.writes())
+
+    def test_windows_unknown_fastboot_serial_during_ram_boot_waits_and_continues(self):
+        self.host.use_lineage()
+        self.host.usb_transition_after_boot = 2
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertGreaterEqual(self.host.now, 4)
+        self.assertEqual(self.flow.state["phase"], "completed")
+        self.assertEqual(len(self.writes()), 1)
+        self.assertEqual(self.writes()[0][0][1:3], ["-s", "SERIAL"])
+        self.assertEqual(sum(args[3:4] == ["boot"] for args, _ in self.host.calls), 1)
+
+    def test_unknown_fastboot_handle_does_not_mask_the_identified_recovery(self):
+        original = self.host.run
+        def enumeration(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args)) == ["fastboot", "devices"] and self.host.mode == "recovery":
+                result.stdout = "????????????\t fastboot\n"
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=enumeration):
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.flow.state["phase"], "completed")
+        self.assertEqual(self.writes()[0][0][1:3], ["-s", "SERIAL"])
+
+    def test_unknown_serial_alone_times_out_without_addressing_or_flashing_it(self):
+        self.flow.serial = "SERIAL"
+        self.host.mode = "recovery"
+        self.host.usb_transition_polls = 1000
+        with self.assertRaisesRegex(recovery.RecoveryError, "Timed out"):
+            self.flow.wait("recovery", 4)
+        self.assertGreaterEqual(self.host.now, 4)
+        self.assertFalse(self.writes())
+        self.assertTrue(all(args in (["adb", "devices"], ["fastboot", "devices"])
+                            for args, _ in self.host.calls))
+
+    def test_unidentified_fastboot_device_cannot_be_selected_at_start(self):
+        self.host.usb_transition_polls = 1
+        with self.assertRaisesRegex(recovery.RecoveryError, "serial yet"):
+            self.flow.execute()
+        self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+
+    def test_other_identified_phone_still_refuses_with_a_placeholder_present(self):
+        self.flow.serial = "SERIAL"
+        self.host.mode = "recovery"
+        self.host.extra = True
+        original = self.host.run
+        def enumeration(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args)) == ["fastboot", "devices"]:
+                result.stdout = "????????????\t fastboot\n"
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=enumeration), \
+                self.assertRaisesRegex(recovery.RecoveryError, "multiple devices"):
+            self.flow.wait("recovery", 4)
+        self.assertFalse(self.writes())
+
+    def test_a_malformed_serial_is_not_treated_as_the_windows_placeholder(self):
+        self.flow.serial = "SERIAL"
+        self.host.mode = "recovery"
+        original = self.host.run
+        def malformed(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args)) == ["fastboot", "devices"]:
+                result.stdout = "BROKEN?SERIAL\t fastboot\n"
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=malformed), \
+                self.assertRaisesRegex(recovery.RecoveryError, "Invalid device-list"):
+            self.flow.wait("recovery", 4)
         self.assertFalse(self.writes())
 
     def test_wrapper_records_failed_flash_and_retains_its_ambiguity(self):
@@ -777,7 +944,13 @@ class CombinedTests(unittest.TestCase):
         self.assertIsNone(self.flow.folder)
 
     def test_unsupported_phone_is_rejected_before_unlock(self):
-        self.host.props["ro.product.model"] = "OTHER"
+        self.host.props["ro.product.vendor.device"] = "OTHER"
+        self.assertEqual(self.combo(), 1)
+        self.assertIsNone(self.unlock_stage)
+        self.assertFalse(self.writes())
+
+    def test_combined_unlock_on_lineage_stops_before_unlock_stage(self):
+        self.host.use_lineage()
         self.assertEqual(self.combo(), 1)
         self.assertIsNone(self.unlock_stage)
         self.assertFalse(self.writes())

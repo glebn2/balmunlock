@@ -17,7 +17,7 @@ def combined(root, args, workflow_factory, banner_shown=False):
             # Reject unsupported phones and missing artifacts BEFORE an unlock can erase data.
             source = inspect_image(image_path(root, args.recovery_image))
             selected_sha256 = file_hash(source)
-            recovery.select_android()
+            recovery.select_android(require_stock=True)
             expected_serial = recovery.serial
             flow = workflow_factory(args.lang, interactive=not args.non_interactive,
                                     verbose=args.verbose)
@@ -59,7 +59,7 @@ def combined(root, args, workflow_factory, banner_shown=False):
                     if time.monotonic() >= deadline:
                         raise RecoveryError("Android boot not confirmed", "Загрузка Android не подтверждена")
                     time.sleep(2)
-                # execute rechecks image, stock identity and unlock receipts, and asks before installation.
+                # execute rechecks the image, device identity and unlock receipts, and asks before installation.
                 return recovery.execute(source, expected_sha256=selected_sha256)
     except (OSError, ValueError, RuntimeError, KeyboardInterrupt, EOFError) as error:
         message = error_message(error, args.lang)
