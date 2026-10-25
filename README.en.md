@@ -208,6 +208,10 @@ For multiple images, select one with
 Check size, structure and SHA-256 with `.\balmunlock.exe --check-recovery-image`.
 [Manual installation and restoring the previous recovery](recovery/INSTALL.md).
 
+The portable ZIP contains only the utility, runtime dependencies, driver preset
+and recovery image. Documentation stays in the repository; build metadata is
+saved locally under `.build/metadata/` and is not included in the ZIP.
+
 On errors the installer retains backups and logs. `--recover` restores the
 service partition after unlocking; use your saved image and the linked
 instructions to restore the previous recovery.

@@ -18,6 +18,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
+    from runtime_bundle import check_runtime_layout
+    check_runtime_layout(args.directory)
     scratch = ROOT / ".build"
     scratch.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="smoke spaces Кириллица ", dir=scratch) as temporary:

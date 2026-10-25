@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from runtime_paths import VERSION
 from recovery_image import IMAGE_NAME, IMAGE_SHA256, image_path, verify_image
 from recovery_archive import ARCHIVE_NAME, ARCHIVE_URL, ARCHIVE_SHA256, read_image
+from runtime_bundle import PLATFORM_FILES, check_runtime_layout
 
 
 def fetch(item, cache):
@@ -78,29 +79,26 @@ def main():
                     "--workpath", str(work), "--distpath", str(frozen),
                     str(ROOT / "build-support" / "balmunlock.spec")], cwd=ROOT, check=True)
     shutil.copytree(frozen / "balmunlock", output)
-    platform_files = ("adb.exe", "fastboot.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll",
-                      "libwinpthread-1.dll", "NOTICE.txt", "source.properties")
     (output / "platform-tools").mkdir()
     with zipfile.ZipFile(platform_zip) as archive:
-        for name in platform_files:
+        for name in sorted(PLATFORM_FILES):
             (output / "platform-tools" / name).write_bytes(archive.read("platform-tools/" + name))
     (output / "tools").mkdir()
     shutil.copy2(ROOT / "tools" / "balmuda-fastboot.cfg", output / "tools")
-    for name in ("README.md", "README.en.md", "LICENSE"):
-        shutil.copy2(ROOT / name, output / name)
     (output / "recovery").mkdir()
-    for name in ("README.md", "INSTALL.md", "CHANGELOG-20261024.md", "CHANGELOG-20261025.md"):
-        shutil.copy2(ROOT / "recovery" / name, output / "recovery" / name)
     if recovery_source is not None:
         bundled_image = output / "recovery" / IMAGE_NAME
         shutil.copyfile(recovery_source, bundled_image)
         verify_image(bundled_image)
     else:
         print("Building without the recovery binary; installation requires the pinned image separately.")
-    licenses = output / "licenses"
+    licenses = output / "_internal" / "licenses"
     licenses.mkdir()
+    shutil.copy2(ROOT / "LICENSE", licenses / "balmunlock-LICENSE.txt")
     shutil.copy2(Path(sys.base_prefix) / "LICENSE.txt", licenses / "Python-LICENSE.txt")
-    for dist in importlib.metadata.distributions():
+    # Only notices for redistributed components; no build environment inventory.
+    for name in ("importlib-resources", "pyinstaller"):
+        dist = importlib.metadata.distribution(name)
         destination = licenses / dist.metadata["Name"]
         destination.mkdir()
         for entry in dist.files or ():
@@ -116,10 +114,6 @@ def main():
                     target = destination.joinpath(*parts)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
-    source_dir = licenses / "libusb-sources"
-    source_dir.mkdir()
-    for path in sources:
-        shutil.copy2(path, source_dir / path.name)
     with zipfile.ZipFile(sources[-1]) as archive:
         copying = next(name for name in archive.namelist() if name.endswith("/COPYING"))
         (licenses / "libusb-COPYING.txt").write_bytes(archive.read(copying))
@@ -134,16 +128,11 @@ def main():
                              "sha256": IMAGE_SHA256, "archive_url": ARCHIVE_URL,
                              "archive_sha256": ARCHIVE_SHA256},
                 "source": "https://github.com/glebn2/balmunlock"}
-    (output / "BUILD-INFO.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    (licenses / "SOURCES.txt").write_text(
-        "balmunlock source: https://github.com/glebn2/balmunlock (release tag or BUILD-INFO commit).\n"
-        "libusb is a replaceable shared DLL under _internal/libusb_package; its corresponding\n"
-        "source and wrapper build instructions are included in libusb-sources/.\n"
-        "PyUSB: https://github.com/pyusb/pyusb/tree/v1.3.1\n"
-        "importlib_resources: https://github.com/python/importlib_resources/tree/v7.1.0\n"
-        "Python: https://www.python.org/downloads/source/\n"
-        "PyInstaller: https://github.com/pyinstaller/pyinstaller (GPL with bootloader exception).\n"
-        "Android Platform-Tools notices: ../platform-tools/NOTICE.txt\n", encoding="utf-8")
+    metadata_dir = ROOT / ".build" / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    (metadata_dir / f"balmunlock-v{VERSION}-BUILD-INFO.json").write_text(
+        json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    check_runtime_layout(output)
     subprocess.run([sys.executable, str(ROOT / "build-support" / "smoke_windows.py"), str(output)],
                    cwd=ROOT, check=True)
     zip_path = Path(shutil.make_archive(str(output), "zip", root_dir=output.parent, base_dir=output.name))

@@ -30,3 +30,7 @@ backup and selected-image readback checks remain in place. TWRP is unchanged:
 9e4d0c0707d83a6a3d5ec3fcad4c2f3296996348603817163540ddad7a840702
 
 Retain sessions/ and recovery-sessions/ when updating.
+
+Download packages contain only the utility, runtime dependencies, USB driver
+preset and recovery image. Documentation, changelogs, source archives and build
+metadata are excluded. Repackaging does not change the executable or image.

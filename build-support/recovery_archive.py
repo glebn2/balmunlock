@@ -11,7 +11,7 @@ from recovery_image import IMAGE_NAME, IMAGE_SHA256, IMAGE_SIZE, image_path, ver
 
 ARCHIVE_NAME = IMAGE_NAME.removesuffix(".img") + ".zip"
 ARCHIVE_URL = f"https://github.com/glebn2/balmunlock/releases/download/v0.5.2/{ARCHIVE_NAME}"
-ARCHIVE_SHA256 = "406777b18cb42f4a55715a71a8efdac610b6ccf3bac42575225acb8148bfc9ca"
+ARCHIVE_SHA256 = "692472e045c25d737366c776c993cf3dbde46a3288d68a99f4a4d5ab603068ef"
 
 
 def read_image(archive_path):
@@ -29,11 +29,7 @@ def read_image(archive_path):
 
 def create_archive(output):
     source = verify_image(image_path(ROOT))
-    entries = [(IMAGE_NAME, source.read_bytes()),
-               ("SHA256SUMS", f"{IMAGE_SHA256}  {IMAGE_NAME}\n".encode("ascii")),
-               ("INSTALL.md", (ROOT / "recovery" / "INSTALL.md").read_bytes().replace(b"\r\n", b"\n")),
-               ("CHANGELOG-20261024.md", (ROOT / "recovery" / "CHANGELOG-20261024.md").read_bytes().replace(b"\r\n", b"\n")),
-               ("CHANGELOG-20261025.md", (ROOT / "recovery" / "CHANGELOG-20261025.md").read_bytes().replace(b"\r\n", b"\n"))]
+    entries = [(IMAGE_NAME, source.read_bytes())]
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for name, data in entries:

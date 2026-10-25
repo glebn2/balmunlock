@@ -35,6 +35,19 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(bundle.read_image(self.path), self.data)
         self.assertFalse((self.path.parent / "unexpected").exists())
 
+    def test_created_archive_contains_only_image_and_is_deterministic(self):
+        image = self.path.parent / "source.img"
+        image.write_bytes(self.data)
+        other = self.path.parent / "second.zip"
+        with patch.object(bundle, "image_path", return_value=image), \
+                patch.object(bundle, "verify_image", return_value=image):
+            bundle.create_archive(self.path)
+            bundle.create_archive(other)
+        self.assertEqual(self.path.read_bytes(), other.read_bytes())
+        with zipfile.ZipFile(self.path) as archive:
+            self.assertEqual(archive.namelist(), [bundle.IMAGE_NAME])
+            self.assertEqual(archive.read(bundle.IMAGE_NAME), self.data)
+
     def test_tampered_archive_is_rejected_before_opening(self):
         self.make()
         self.path.write_bytes(self.path.read_bytes() + b"changed")
