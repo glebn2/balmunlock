@@ -1,26 +1,31 @@
-balmunlock 0.5.1 — TWRP for A101BM and X01A
+balmunlock 0.5.2 — TWRP 20261025
 
-TWRP installation and unlock + TWRP now support both BALMUDA Phone models:
-- A101BM: stock Android 12, 1.280PO.0686.a.
-- X01A: stock Android 12, 1.280MI.0648.a.
+The start menu provides unlock only, TWRP only, and unlock + TWRP.
+Both A101BM and X01A are supported on stock Android 12 / 1.280, active slot b.
 
-The installer recognizes each model's own build and fingerprints, saves the
-current recovery, flashes recovery_b and checks the result before returning
-to Android. Use active slot b; TWRP installation requires an unlocked bootloader.
-The combined workflow can unlock first. Existing unlock sessions remain compatible.
+TWRP updates no longer require rebuilding balmunlock. Keep one .img with any
+filename in recovery/, or use --recovery-image PATH. An image different from
+the bundled build shows a warning within the normal installation confirmation.
+Size and structure checks, original recovery backup, selected-image hash binding
+and readback verification are retained. Runtime TWRP version/fingerprint are
+recorded without requiring a particular build. Release packaging still verifies
+the exact bundled image and archive hashes.
 
-The three-option menu and automatic RU/EN language selection are retained.
-The RU/EN guides now give the same installation path for both models.
+Update the bundled recovery to TWRP 3.7.1_12-BALMUDA_Phone (20261025).
 
-The TWRP image is unchanged: 3.7.1_12-BALMUDA_Phone (20261024).
+- Clear explanation when metadata decryption fails, including the Format Data option.
+- Clear message when a pending installation is skipped after PIN entry is cancelled.
+
+The same image supports A101BM and X01A. Installation, backup verification,
+the three-option menu and automatic RU/EN language selection are retained.
+
 Image SHA-256:
-9d19aeaac7b6f96d00fa4745f7cdc3642b2a06988124c8859d2f59f0d604a6f7
-Fixed TWRP ZIP SHA-256 (instructions updated for both models):
-b1b3d90f6dbebe3ac1ea76903a915a8925750716272ecb09c4b764abafb1cd72
+9e4d0c0707d83a6a3d5ec3fcad4c2f3296996348603817163540ddad7a840702
+Fixed TWRP ZIP SHA-256:
+406777b18cb42f4a55715a71a8efdac610b6ccf3bac42575225acb8148bfc9ca
 
-The Windows ZIP includes the image. A separate TWRP ZIP includes the image,
-manual installation guide, changelog and SHA256SUMS. Both ZIPs have checksum
-files. The existing v0.5.0 release and its fixed archive remain available.
+The TWRP ZIP includes manual installation instructions, SHA256SUMS and both
+20261024 and 20261025 changelogs. Existing published releases remain available.
 
 Unlocking erases user data. Installing TWRP on an unlocked phone does not.
 Retain the recovery-sessions/ and sessions/ backup directories.

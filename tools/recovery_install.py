@@ -1,4 +1,4 @@
-"""Install the pinned TWRP through a prepared, already unlocked bootloader.
+"""Install the selected TWRP through a prepared, already unlocked bootloader.
 
 This workflow never invokes unlock helpers, DIAG, root preparation, or AVB flags.
 All partition writes are explicit recovery_b writes; failures do not auto-restore.
@@ -14,9 +14,8 @@ import time
 import uuid
 
 from operation_signals import OperationSignals
-from recovery_image import (IMAGE_NAME, IMAGE_SHA256, IMAGE_SIZE, STOCK_IDENTITIES,
-                            TWRP_VERSION, TWRP_MODEL, TWRP_FINGERPRINT,
-                            file_hash, image_path, verify_image)
+from recovery_image import (IMAGE_SHA256, IMAGE_SIZE, STOCK_IDENTITIES,
+                            file_hash, image_path, inspect_image)
 from session_lock import session_lock
 from session_store import SessionStore, directory_key, regular_path, valid_serial
 from ui_language import error_message
@@ -55,6 +54,8 @@ class RecoveryInstaller:
         self.serial = None
         self.stock_model = None
         self.stock_build = None
+        self.image_hash = None
+        self.source_name = None
         self.folder = None
         self.state = {}
         self.events = []
@@ -201,17 +202,23 @@ class RecoveryInstaller:
     def check_twrp(self):
         self.wait("recovery", 120)
         props = self.properties()
-        for key, value in {"ro.boot.serialno": self.serial, "ro.product.vendor.model": TWRP_MODEL,
-                           "ro.vendor.build.fingerprint": TWRP_FINGERPRINT,
-                           "ro.boot.slot_suffix": "_b"}.items():
+        for key, value in {"ro.boot.serialno": self.serial, "ro.boot.slot_suffix": "_b"}.items():
             if props.get(key) != value:
                 self.fail(f"Recovery: не совпадает {key}.", f"Recovery identity mismatch: {key}.")
         version = props.get("ro.twrp.version", "")
-        if version != TWRP_VERSION and not version.startswith(TWRP_VERSION + "-"):
-            self.fail("Не подтверждена ожидаемая версия TWRP.", "Expected TWRP version not confirmed.")
+        if not version.strip():
+            self.fail("TWRP не сообщил свою версию.", "TWRP did not report its version.")
         if self.adb("shell", "id", "-u").stdout.strip() != "0":
             self.fail("В TWRP нет доступа для чтения раздела. Новые права не запрашиваются.",
                       "TWRP cannot read the partition. No privilege preparation will be attempted.")
+        self.state.update(twrp_version=version, twrp_fingerprint=props.get("ro.vendor.build.fingerprint", ""))
+        self.log(f"TWRP version: {version}; fingerprint: {props.get('ro.vendor.build.fingerprint', '')}")
+
+    def check_selected_image(self, path):
+        inspect_image(path)
+        if file_hash(path) != self.image_hash:
+            self.fail("Выбранный образ изменился после подтверждения. Установка остановлена.",
+                      "Selected image changed after confirmation. Installation stopped.")
 
     def block_hash(self):
         output = self.adb("shell", "sha256sum", BLOCK, timeout=120).stdout
@@ -239,7 +246,8 @@ class RecoveryInstaller:
         target.rename(backup)
         (backup.with_suffix(".img.sha256")).write_text(f"{before}  {backup.name}\n", encoding="ascii")
         self.save("backup_verified", original_sha256=before, backup=backup.name,
-                  original_was_pinned_twrp=(before == IMAGE_SHA256))
+                  original_was_pinned_twrp=(before == IMAGE_SHA256),
+                  original_matches_selected_image=(before == self.image_hash))
         self.adb("shell", "rm", temporary)
         return before
 
@@ -253,7 +261,9 @@ class RecoveryInstaller:
         self.folder = owner / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8])
         self.folder.mkdir()
         (self.folder / "recovery-install.log").write_text("".join(self.events), encoding="utf-8")
-        self.save("confirmed", image_sha256=IMAGE_SHA256, image_bytes=IMAGE_SIZE,
+        self.save("confirmed", image_sha256=self.image_hash, image_bytes=IMAGE_SIZE,
+                  source_filename=self.source_name, image_file="recovery.img",
+                  bundled_image=(self.image_hash == IMAGE_SHA256),
                   partition=PARTITION, stock_model=self.stock_model, stock_build=self.stock_build)
 
     def select_android(self):
@@ -271,15 +281,27 @@ class RecoveryInstaller:
         if self.android_identity().get("sys.boot_completed") != "1":
             self.fail("Дождитесь полной загрузки штатного Android.", "Wait for stock Android to finish booting.")
 
-    def execute(self, override=None):
+    def execute(self, override=None, expected_sha256=None):
         # No device discovery before the artifact passes its offline checks.
         try:
-            source = verify_image(image_path(self.root, override))
+            source = inspect_image(image_path(self.root, override))
         except FileNotFoundError as error:
-            self.fail(f"Не найден {IMAGE_NAME}. Положите проверенный образ в папку recovery рядом с программой.",
-                      f"Missing {IMAGE_NAME}. Place the verified image in the recovery directory beside the app.")
+            self.fail("Не найден образ TWRP. Положите один .img в папку recovery рядом с программой.",
+                      "Missing TWRP image. Place one .img in the recovery directory beside the app.")
+        self.image_hash = file_hash(source)
+        self.source_name = source.name
+        if expected_sha256 is not None and self.image_hash != expected_sha256:
+            self.fail("Образ TWRP изменился во время анлока. Установка остановлена.",
+                      "TWRP image changed during unlocking. Installation stopped.")
         self.select_android()
         self.clean_unlock_session()
+        self.say(f"Образ: {source.name}\nSHA-256: {self.image_hash}",
+                 f"Image: {source.name}\nSHA-256: {self.image_hash}")
+        if self.image_hash != IMAGE_SHA256:
+            self.say("Внимание: этот образ отличается от комплектной сборки TWRP. "
+                     "Подтверждение ниже разрешает установку выбранного файла.",
+                     "Warning: this image differs from the bundled TWRP. "
+                     "Confirmation below authorizes installing the selected file.")
         self.say(f"Установка TWRP: {self.stock_model} {self.stock_build}, слот b. Сохраню текущий recovery на ПК, затем заменю только recovery_b. "
                  "Сохраните важные данные отдельно. Продолжить? [yes/N]",
                  f"Install TWRP: {self.stock_model} {self.stock_build}, slot b. Back up the current recovery, then replace recovery_b only. "
@@ -289,9 +311,9 @@ class RecoveryInstaller:
         self.create_folder()
         self.say(f"Бэкап и журнал: {self.folder}", f"Backup and log: {self.folder}")
         # Use an immutable per-run copy, so changing the source during the round-trip cannot change what is flashed.
-        image = self.folder / IMAGE_NAME
+        image = self.folder / "recovery.img"
         shutil.copyfile(source, image)
-        verify_image(image)
+        self.check_selected_image(image)
         self.say("Проверяю разблокировку и соединение с загрузчиком. При необходимости установите драйвер fastboot "
                  "18D1:D00D (Windows: WinUSB, preset tools/balmuda-fastboot.cfg). Ожидание до 5 минут.",
                  "Checking the unlocked bootloader. If needed, install the 18D1:D00D fastboot driver "
@@ -305,10 +327,10 @@ class RecoveryInstaller:
         self.fb("boot", str(image), timeout=120)
         self.check_twrp()
         original = self.backup()
-        if original != IMAGE_SHA256:
+        if original != self.image_hash:
             self.adb("reboot", "bootloader")
             self.check_bootloader()
-            verify_image(image)
+            self.check_selected_image(image)
             # The global lock, no timer, and deferred signals cover the writer AND the durable receipt.
             self.say("Оригинал сохранён. Записываю recovery_b; не отключайте кабель.",
                      "Original backed up. Writing recovery_b; do not disconnect USB.")
@@ -323,10 +345,10 @@ class RecoveryInstaller:
         else:
             self.say("Этот TWRP уже установлен; повторной записи не будет.",
                      "This TWRP is already installed; no repeat flash.")
-        if self.block_hash() != IMAGE_SHA256:
+        if self.block_hash() != self.image_hash:
             self.fail("Хеш recovery_b после установки не совпал. Не продолжайте установку.",
                       "Installed recovery_b hash mismatch. Stop here.")
-        self.save("partition_verified", installed_sha256=IMAGE_SHA256)
+        self.save("partition_verified", installed_sha256=self.image_hash)
         self.say("Раздел проверен. Проверяю возврат в Android...", "Partition verified. Checking Android return...")
         self.adb("reboot")
         self.wait("device", 180)

@@ -191,7 +191,7 @@ Windows может потребовать повторную привязку д
 Подтвердите установку словом `yes`. Если на экране TWRP появится вопрос,
 выберите **Keep Read Only**.
 
-Включён **TWRP 3.7.1_12-BALMUDA_Phone (20261024)**. Root, Magisk, GSI,
+Включён **TWRP 3.7.1_12-BALMUDA_Phone (20261025)**. Root, Magisk, GSI,
 повторный анлок и сброс данных для установки не нужны.
 
 Программа временно загружает TWRP, сохраняет текущий recovery_b на ПК,
@@ -204,8 +204,12 @@ Windows может потребовать повторную привязку д
 recovery, в том числе кастомный.
 
 В Windows-сборке образ уже лежит в `recovery/`. При запуске из исходников
-распакуйте туда образ из [архива TWRP](https://github.com/glebn2/balmunlock/releases/download/v0.5.1/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip).
-Проверка образа: `.\balmunlock.exe --check-recovery-image`.
+распакуйте туда образ из [архива TWRP](https://github.com/glebn2/balmunlock/releases/download/v0.5.2/TWRP-3.7.1_12-BALMUDA_Phone-20261025.zip).
+Чтобы обновить TWRP без обновления программы, замените `.img` в `recovery/`.
+Оставьте один образ; имя файла может быть любым. Для другой сборки программа
+покажет предупреждение и даст прошить её после обычного `yes`.
+Если образов несколько: `.\balmunlock.exe --install-recovery --recovery-image PATH`.
+Проверка размера, структуры и SHA-256: `.\balmunlock.exe --check-recovery-image`.
 [Ручная установка и возврат прежнего recovery](recovery/INSTALL.md).
 
 При ошибке программа сохраняет журнал и бэкап. `--recover` относится к

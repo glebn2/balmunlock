@@ -58,6 +58,17 @@ def main():
         result = run(exe, "--check-recovery-image", "--lang", "en", expected=0 if has_recovery else 1)
         if has_recovery:
             assert "OK (offline)" in result
+            # A different payload remains an offline check: no device transports.
+            alternate = caller / "another-build.img"
+            shutil.copyfile(app / "recovery" / IMAGE_NAME, alternate)
+            with alternate.open("r+b") as stream:
+                stream.seek(8192)
+                value = stream.read(1)
+                stream.seek(8192)
+                stream.write(bytes([value[0] ^ 1]))
+            alternate_hash = hashlib.sha256(alternate.read_bytes()).hexdigest()
+            result = run(exe, "--check-recovery-image", "--recovery-image", alternate, "--lang", "en")
+            assert alternate_hash in result and "differs from the bundled" in result
         else:
             assert "Missing" in run(exe, "--install-recovery", "--lang", "en", input="", expected=1)
         # Exercise the frozen installer module through an offline refusal. Its

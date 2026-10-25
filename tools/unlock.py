@@ -1143,7 +1143,7 @@ def main():
     mode.add_argument("--install-recovery", action="store_true", help=help_text("установить TWRP на уже разблокированный A101BM или X01A 1.280, слот b", "install TWRP on an already unlocked A101BM or X01A 1.280, slot b"))
     mode.add_argument("--unlock-and-recovery", action="store_true", help=help_text("разблокировать загрузчик, затем установить TWRP на тот же телефон", "unlock the bootloader, then install TWRP on the same phone"))
     mode.add_argument("--check-recovery-image", action="store_true", help=help_text("проверить образ TWRP на ПК, без ADB/USB", "verify the TWRP image on the host, without ADB/USB"))
-    parser.add_argument("--recovery-image", type=Path, help=help_text("путь к образу TWRP; SHA-256 должен совпасть с закреплённым", "TWRP image path; must match the pinned SHA-256"))
+    parser.add_argument("--recovery-image", type=Path, help=help_text("путь к образу TWRP; для другой сборки выводится предупреждение", "TWRP image path; another build displays a warning"))
     mode.add_argument("--preflight", action="store_true", help=help_text("подробно проверить зависимости на ПК, без ADB/USB", "detailed host checks only; no ADB/USB"))
     mode.add_argument("--recover", action="store_true", help=help_text("продолжить восстановление исходного раздела без нового анлока", "resume recovery of the original partition without a new unlock"))
     mode.add_argument("--prepare", action="store_true", help=help_text("подготовить DIAG и бэкапы, без метки и анлока", "prepare DIAG and backups without a marker or unlock"))
@@ -1154,10 +1154,14 @@ def main():
         parser.error(help_text("--recovery-image требует --install-recovery, --unlock-and-recovery или --check-recovery-image",
                                "--recovery-image requires --install-recovery, --unlock-and-recovery or --check-recovery-image"))
     if args.check_recovery_image:
-        from recovery_image import IMAGE_SHA256, image_path, verify_image
+        from recovery_image import IMAGE_SHA256, file_hash, image_path, inspect_image
         try:
-            path = verify_image(image_path(ROOT, args.recovery_image))
-            print(f"TWRP: {path}\nSHA-256: {IMAGE_SHA256}\n" + help_text("OK (проверка на ПК)", "OK (offline)"))
+            path = inspect_image(image_path(ROOT, args.recovery_image))
+            digest = file_hash(path)
+            print(f"TWRP: {path}\nSHA-256: {digest}\n" + help_text("OK (проверка на ПК)", "OK (offline)"))
+            if digest != IMAGE_SHA256:
+                print(help_text("Внимание: образ отличается от комплектного TWRP.",
+                                "Warning: image differs from the bundled TWRP."))
             return 0
         except (OSError, ValueError) as error:
             print(error_message(error, args.lang), file=sys.stderr)

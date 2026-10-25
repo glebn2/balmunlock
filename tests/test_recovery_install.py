@@ -27,11 +27,15 @@ class ImageTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix=".test-balmunlock-", dir=ROOT)
         self.addCleanup(self.tmp.cleanup)
         self.image = Path(self.tmp.name) / "image.img"
-        data = bytearray(8192)
+        data = bytearray(32768)
         data[:8] = b"ANDROID!"
+        struct.pack_into("<I", data, 8, 256)
+        struct.pack_into("<I", data, 16, 256)
         struct.pack_into("<I", data, 36, 4096)
         struct.pack_into("<I", data, 40, 2)
         data[-64:-60] = b"AVBf"
+        struct.pack_into(">QQQ", data, len(data) - 52, 16384, 16384, 256)
+        data[16384:16388] = b"AVB0"
         self.data = bytes(data)
         self.image.write_bytes(self.data)
         self.addCleanup(patch.stopall)
@@ -46,6 +50,42 @@ class ImageTests(unittest.TestCase):
             self.image.write_bytes(data)
             with self.assertRaises(ValueError):
                 artifact.verify_image(self.image)
+
+    def test_other_image_passes_structure_but_release_packaging_requires_bundled_hash(self):
+        data = bytearray(self.data)
+        data[4096] = 1
+        self.image.write_bytes(data)
+        self.assertEqual(artifact.inspect_image(self.image), self.image.resolve())
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            artifact.verify_image(self.image)
+
+    def test_out_of_bounds_payload_and_vbmeta_are_rejected_without_a_hash_reference(self):
+        for offset, fmt, value in ((8, "<I", 0xFFFFFFFF),
+                                   (len(self.data) - 44, ">Q", len(self.data)),
+                                   (16384, "<I", 0)):
+            with self.subTest(offset=offset):
+                data = bytearray(self.data)
+                struct.pack_into(fmt, data, offset, value)
+                self.image.write_bytes(data)
+                with self.assertRaises(ValueError):
+                    artifact.inspect_image(self.image)
+
+    def test_folder_accepts_a_single_image_with_any_name(self):
+        root = Path(self.tmp.name)
+        (root / "recovery").mkdir()
+        replacement = root / "recovery" / "new-build.IMG"
+        replacement.write_bytes(self.data)
+        self.assertEqual(artifact.image_path(root), replacement)
+
+    def test_multiple_images_require_an_explicit_path(self):
+        root = Path(self.tmp.name)
+        (root / "recovery").mkdir()
+        for name in ("one.img", "two.img"):
+            (root / "recovery" / name).write_bytes(self.data)
+        with self.assertRaisesRegex(ValueError, "Multiple"):
+            artifact.image_path(root)
+        selected = root / "recovery" / "two.img"
+        self.assertEqual(artifact.image_path(root, selected), selected)
 
     def test_structure_is_checked_even_with_a_matching_digest(self):
         for offset in (0, 36, 40, len(self.data) - 64):
@@ -192,7 +232,7 @@ class RecoveryTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.object(recovery, "IMAGE_SIZE", len(self.data)).start()
         patch.object(recovery, "IMAGE_SHA256", hashlib.sha256(self.data).hexdigest()).start()
-        patch.object(recovery, "verify_image", side_effect=self.verify).start()
+        patch.object(recovery, "inspect_image", side_effect=self.verify).start()
         patch.object(recovery.shutil, "which", return_value="tool").start()
         patch.object(recovery.subprocess, "run", side_effect=self.host.run).start()
         patch.object(recovery.time, "monotonic", side_effect=lambda: self.host.now).start()
@@ -238,6 +278,64 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.flow.execute()
         self.assertFalse(self.host.calls)
+
+    def test_other_image_warns_once_and_verifies_its_actual_hash(self):
+        self.host.partition = self.data  # Replace an already installed bundled build.
+        self.data = b"different-build!" * 256
+        self.image.write_bytes(self.data)
+        digest = hashlib.sha256(self.data).hexdigest()
+        self.assertNotEqual(digest, recovery.IMAGE_SHA256)
+        with patch("builtins.input", return_value="yes") as prompt, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(prompt.call_count, 1)
+        self.assertEqual(output.getvalue().count("Внимание:"), 1)
+        self.assertEqual(self.flow.state["image_sha256"], digest)
+        self.assertEqual(self.flow.state["installed_sha256"], digest)
+        self.assertFalse(self.flow.state["bundled_image"])
+        self.assertEqual(self.host.partition, self.data)
+
+    def test_other_image_decline_never_reboots(self):
+        self.data = b"different-build!" * 256
+        self.image.write_bytes(self.data)
+        with patch("builtins.input", return_value="no"):
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+
+    def test_same_other_image_already_installed_skips_flash(self):
+        self.data = b"different-build!" * 256
+        self.image.write_bytes(self.data)
+        self.host.partition = self.data
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertFalse(self.writes())
+        self.assertTrue(self.flow.state["original_matches_selected_image"])
+        self.assertFalse(self.flow.state["original_was_pinned_twrp"])
+
+    def test_changed_confirmed_image_stops_before_first_reboot(self):
+        def confirm():
+            self.image.write_bytes(b"x" * len(self.data))
+            return "yes"
+        with patch("builtins.input", side_effect=confirm), \
+                patch.object(recovery, "inspect_image", side_effect=Path), \
+                self.assertRaisesRegex(recovery.RecoveryError, "image changed"):
+            self.flow.execute()
+        self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+
+    def test_changed_per_run_image_stops_before_flash_and_retains_backup(self):
+        original = self.host.run
+        def changed(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args))[3:4] == ["pull"]:
+                (self.flow.folder / "recovery.img").write_bytes(b"x" * len(self.data))
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=changed), \
+                patch.object(recovery, "inspect_image", side_effect=Path), \
+                self.assertRaisesRegex(recovery.RecoveryError, "image changed"):
+            self.flow.execute()
+        self.assertFalse(self.writes())
+        self.assertTrue((self.flow.folder / self.flow.state["backup"]).exists())
 
     def test_missing_artifact_refuses_before_device_access(self):
         self.image.unlink()
@@ -348,24 +446,20 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.flow.execute(), 0)
         self.assertEqual(path.read_text(), data)
 
-    def test_recovery_fingerprint_is_the_recorded_twrp_fingerprint_not_stock_vendor(self):
-        self.host.recovery_props["ro.vendor.build.fingerprint"] = artifact.VENDOR_FINGERPRINT
+    def test_missing_twrp_version_stops_before_flash(self):
+        self.host.recovery_props.pop("ro.twrp.version")
         with self.assertRaises(recovery.RecoveryError):
             self.flow.execute()
         self.assertFalse(self.writes())
 
-    def test_old_recovery_model_version_and_fingerprint_stop_before_flash(self):
-        for key, value in (("ro.product.vendor.model", "A101BM"),
-                           ("ro.twrp.version", "3.7.1_12-0"),
-                           ("ro.vendor.build.fingerprint", "old-twrp-fingerprint")):
-            with self.subTest(key=key):
-                original = self.host.recovery_props[key]
-                self.host.recovery_props[key] = value
-                self.host.mode = "device"
-                with self.assertRaises(recovery.RecoveryError):
-                    self.flow.execute()
-                self.host.recovery_props[key] = original
-                self.assertFalse(self.writes())
+    def test_other_twrp_version_model_and_fingerprint_are_recorded_without_refusal(self):
+        self.host.recovery_props.update({"ro.product.vendor.model": "BALMUDA Phone",
+                                         "ro.twrp.version": "3.8.0_14-new-build",
+                                         "ro.vendor.build.fingerprint": "new-build-fingerprint"})
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.flow.state["twrp_version"], "3.8.0_14-new-build")
+        self.assertEqual(self.flow.state["twrp_fingerprint"], "new-build-fingerprint")
+        self.assertEqual(len(self.writes()), 1)
 
     def test_corrupt_pull_keeps_partial_backup_and_never_flashes(self):
         self.host.pull_bad = True
@@ -524,10 +618,13 @@ class EntryMenuTests(unittest.TestCase):
 
     def test_offline_image_check_never_discovers_devices(self):
         with patch.object(sys, "argv", ["balmunlock", "--check-recovery-image"]), \
-                patch.object(artifact, "verify_image", return_value=Path("approved.img")), \
+                patch.object(artifact, "image_path", return_value=Path("approved.img")), \
+                patch.object(artifact, "inspect_image", return_value=Path("approved.img")), \
+                patch.object(artifact, "file_hash", return_value="f" * 64), \
                 patch("subprocess.run", side_effect=AssertionError("No device calls")), \
-                contextlib.redirect_stdout(io.StringIO()):
+                contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(unlock.main(), 0)
+        self.assertIn("f" * 64, output.getvalue())
 
     def test_recovery_image_cannot_be_attached_to_an_unlock_mode(self):
         with patch.object(sys, "argv", ["balmunlock", "--unlock", "--recovery-image", "x.img"]), \
@@ -543,7 +640,7 @@ class CombinedTests(unittest.TestCase):
     writes = RecoveryTests.writes
 
     def combo(self, *, result=0, phase="reboot_submitted", marker=False, fresh=False,
-              observed=False, pending=False, route_serial="SERIAL", completed_serial="SERIAL"):
+              observed=False, pending=False, route_serial="SERIAL", completed_serial="SERIAL", after_unlock=None):
         class UnlockStage:
             def __init__(stage, lang, **kwargs):
                 stage.signals = recovery.OperationSignals(lang)
@@ -569,6 +666,8 @@ class CombinedTests(unittest.TestCase):
                 stage.marker_possible = marker
                 stage.already_unlocked_observed = observed
                 stage.unlocked_this_run = fresh
+                if after_unlock is not None:
+                    after_unlock()
                 return result
             def record_error(stage, error):
                 pass
@@ -582,7 +681,7 @@ class CombinedTests(unittest.TestCase):
             self.unlock_stage = UnlockStage(*args, **kwargs)
             return self.unlock_stage
         # The alias uses the real verifier in production, and the fixture's small pinned artifact here.
-        with patch.object(combined_workflow, "verify_image", side_effect=self.verify), \
+        with patch.object(combined_workflow, "inspect_image", side_effect=self.verify), \
                 patch.object(combined_workflow, "RecoveryInstaller", return_value=self.flow):
             return combined_workflow.combined(self.root, args, factory)
 
@@ -598,11 +697,19 @@ class CombinedTests(unittest.TestCase):
         self.assertEqual(self.flow.state["stock_model"], "X01A")
         self.assertEqual(self.flow.state["stock_build"], "1.280MI.0648.a")
 
+    def test_combined_flow_accepts_other_image_and_uses_its_hash(self):
+        self.data = b"different-build!" * 256
+        self.image.write_bytes(self.data)
+        self.assertEqual(self.combo(), 0)
+        self.assertTrue(self.unlock_stage.guided_called)
+        self.assertEqual(self.flow.state["installed_sha256"], hashlib.sha256(self.data).hexdigest())
+        self.assertFalse(self.flow.state["bundled_image"])
+
     def test_real_unlock_workflow_on_unlocked_phone_continues_without_unlock_or_wipe(self):
         args = types.SimpleNamespace(lang="en", non_interactive=True, verbose=False,
                                      recovery_image=self.image, session=None,
                                      recover=False, prepare=False, unlock_prepared=False)
-        with patch.object(combined_workflow, "verify_image", side_effect=self.verify), \
+        with patch.object(combined_workflow, "inspect_image", side_effect=self.verify), \
                 patch.object(combined_workflow, "RecoveryInstaller", return_value=self.flow), \
                 patch.object(unlock, "ROOT", self.root), patch.object(unlock, "preflight", return_value=True):
             self.assertEqual(combined_workflow.combined(self.root, args, unlock.Workflow), 0)
@@ -659,6 +766,15 @@ class CombinedTests(unittest.TestCase):
         self.assertEqual(self.combo(), 1)
         self.assertIsNone(self.unlock_stage)
         self.assertFalse(self.host.calls)
+
+    def test_image_changed_during_unlock_never_starts_recovery(self):
+        def changed():
+            self.data = b"different-build!" * 256
+            self.image.write_bytes(self.data)
+        self.assertEqual(self.combo(after_unlock=changed), 1)
+        self.assertTrue(self.unlock_stage.guided_called)
+        self.assertFalse(self.writes())
+        self.assertIsNone(self.flow.folder)
 
     def test_unsupported_phone_is_rejected_before_unlock(self):
         self.host.props["ro.product.model"] = "OTHER"

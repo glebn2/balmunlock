@@ -1,7 +1,7 @@
-# TWRP 3.7.1_12-BALMUDA_Phone (20261024)
+# TWRP 3.7.1_12-BALMUDA_Phone (20261025)
 
-Образ: `TWRP-3.7.1_12-BALMUDA_Phone-20261024.img`, 100663296 байт.
-SHA-256: `9d19aeaac7b6f96d00fa4745f7cdc3642b2a06988124c8859d2f59f0d604a6f7`.
+Образ: `TWRP-3.7.1_12-BALMUDA_Phone-20261025.img`, 100663296 байт.
+SHA-256: `9e4d0c0707d83a6a3d5ec3fcad4c2f3296996348603817163540ddad7a840702`.
 
 Один образ для **A101BM и X01A**. Штатный Android 12: `1.280PO.0686.a`
 для A101BM, `1.280MI.0648.a` для X01A. Загрузчик разблокирован, активный слот b.
@@ -13,7 +13,7 @@ Root, Magisk, GSI, повторный анлок и сброс данных дл
 Распакуйте архив, откройте терминал в его каталоге. Проверьте хеш:
 
 ```powershell
-Get-FileHash .\TWRP-3.7.1_12-BALMUDA_Phone-20261024.img -Algorithm SHA256
+Get-FileHash .\TWRP-3.7.1_12-BALMUDA_Phone-20261025.img -Algorithm SHA256
 adb shell getprop ro.build.version.incremental
 adb reboot bootloader
 fastboot getvar unlocked
@@ -29,7 +29,7 @@ fastboot getvar snapshot-update-status
 Временный запуск и сохранение текущего recovery (при запросе — Keep Read Only):
 
 ```powershell
-fastboot boot TWRP-3.7.1_12-BALMUDA_Phone-20261024.img
+fastboot boot TWRP-3.7.1_12-BALMUDA_Phone-20261025.img
 adb shell "dd if=/dev/block/by-name/recovery_b of=/tmp/recovery_b.backup.img bs=1048576 count=96 && sha256sum /tmp/recovery_b.backup.img"
 adb pull /tmp/recovery_b.backup.img recovery_b.backup.img
 Get-FileHash .\recovery_b.backup.img -Algorithm SHA256
@@ -45,7 +45,7 @@ fastboot getvar unlocked
 fastboot getvar is-userspace
 fastboot getvar current-slot
 fastboot getvar snapshot-update-status
-fastboot flash recovery_b TWRP-3.7.1_12-BALMUDA_Phone-20261024.img
+fastboot flash recovery_b TWRP-3.7.1_12-BALMUDA_Phone-20261025.img
 fastboot reboot recovery
 adb shell sha256sum /dev/block/by-name/recovery_b
 ```
@@ -70,7 +70,7 @@ fastboot reboot
 
 ## Особенности сборки
 
-Перечень изменений и проверок — `CHANGELOG-20261024.md`. Расшифровка LineageOS
+Перечень изменений и проверок — `CHANGELOG-20261025.md`. Расшифровка LineageOS
 требует stock-compatible версии и патча в заголовке boot: 11.0.0 / 2023-09.
 Встроенный обход EROFS для MindTheGapps-17 срабатывает при Reboot → System
 (также `twrp reboot system`), но не при `adb reboot`. Отключение:

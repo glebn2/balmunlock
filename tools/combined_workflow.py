@@ -1,8 +1,8 @@
-"""Unlock followed by the pinned recovery, with one serial and one process lock."""
+"""Unlock followed by the selected recovery, with one serial and one process lock."""
 from pathlib import Path
 import time
 
-from recovery_image import image_path, verify_image
+from recovery_image import file_hash, image_path, inspect_image
 from recovery_install import RecoveryError, RecoveryInstaller
 from session_lock import session_lock
 from ui_language import error_message
@@ -15,7 +15,8 @@ def combined(root, args, workflow_factory, banner_shown=False):
     try:
         with session_lock(Path(root) / ".unlock.lock"):
             # Reject unsupported phones and missing artifacts BEFORE an unlock can erase data.
-            source = verify_image(image_path(root, args.recovery_image))
+            source = inspect_image(image_path(root, args.recovery_image))
+            selected_sha256 = file_hash(source)
             recovery.select_android()
             expected_serial = recovery.serial
             flow = workflow_factory(args.lang, interactive=not args.non_interactive,
@@ -59,7 +60,7 @@ def combined(root, args, workflow_factory, banner_shown=False):
                         raise RecoveryError("Android boot not confirmed", "Загрузка Android не подтверждена")
                     time.sleep(2)
                 # execute rechecks image, stock identity and unlock receipts, and asks before installation.
-                return recovery.execute(source)
+                return recovery.execute(source, expected_sha256=selected_sha256)
     except (OSError, ValueError, RuntimeError, KeyboardInterrupt, EOFError) as error:
         message = error_message(error, args.lang)
         if flow is not None:

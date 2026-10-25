@@ -187,7 +187,7 @@ Android with USB debugging authorized and select **2 — TWRP only**.
 For direct launch: `.\balmunlock.exe --install-recovery`.
 Confirm with `yes`; choose **Keep Read Only** if TWRP prompts on the phone.
 
-The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261024)**. Root, Magisk,
+The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261025)**. Root, Magisk,
 GSI, another unlock and a factory reset are not required to install it.
 
 The installer temporarily boots TWRP, backs up recovery_b to the PC, verifies
@@ -200,8 +200,13 @@ Keep a separate copy. When updating TWRP, the backup contains the previous
 recovery, including a custom one.
 
 The Windows package includes the image in `recovery/`. For source launches,
-extract the image from the [TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.5.1/TWRP-3.7.1_12-BALMUDA_Phone-20261024.zip)
-into that directory. Verify it with `.\balmunlock.exe --check-recovery-image`.
+extract the image from the [TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.5.2/TWRP-3.7.1_12-BALMUDA_Phone-20261025.zip)
+into that directory. To update TWRP without updating the utility, replace the
+`.img` in `recovery/`. Keep one image; any filename is accepted. A different
+build shows a warning and can be installed with the usual `yes` confirmation.
+For multiple images, select one with
+`.\balmunlock.exe --install-recovery --recovery-image PATH`.
+Check size, structure and SHA-256 with `.\balmunlock.exe --check-recovery-image`.
 [Manual installation and restoring the previous recovery](recovery/INSTALL.md).
 
 On errors the installer retains backups and logs. `--recover` restores the

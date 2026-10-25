@@ -10,8 +10,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 from recovery_image import IMAGE_NAME, IMAGE_SHA256, IMAGE_SIZE, image_path, verify_image, file_hash
 
 ARCHIVE_NAME = IMAGE_NAME.removesuffix(".img") + ".zip"
-ARCHIVE_URL = f"https://github.com/glebn2/balmunlock/releases/download/v0.5.1/{ARCHIVE_NAME}"
-ARCHIVE_SHA256 = "b1b3d90f6dbebe3ac1ea76903a915a8925750716272ecb09c4b764abafb1cd72"
+ARCHIVE_URL = f"https://github.com/glebn2/balmunlock/releases/download/v0.5.2/{ARCHIVE_NAME}"
+ARCHIVE_SHA256 = "406777b18cb42f4a55715a71a8efdac610b6ccf3bac42575225acb8148bfc9ca"
 
 
 def read_image(archive_path):
@@ -32,11 +32,12 @@ def create_archive(output):
     entries = [(IMAGE_NAME, source.read_bytes()),
                ("SHA256SUMS", f"{IMAGE_SHA256}  {IMAGE_NAME}\n".encode("ascii")),
                ("INSTALL.md", (ROOT / "recovery" / "INSTALL.md").read_bytes().replace(b"\r\n", b"\n")),
-               ("CHANGELOG-20261024.md", (ROOT / "recovery" / "CHANGELOG-20261024.md").read_bytes().replace(b"\r\n", b"\n"))]
+               ("CHANGELOG-20261024.md", (ROOT / "recovery" / "CHANGELOG-20261024.md").read_bytes().replace(b"\r\n", b"\n")),
+               ("CHANGELOG-20261025.md", (ROOT / "recovery" / "CHANGELOG-20261025.md").read_bytes().replace(b"\r\n", b"\n"))]
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for name, data in entries:
-            entry = zipfile.ZipInfo(name, date_time=(2026, 10, 24, 0, 0, 0))
+            entry = zipfile.ZipInfo(name, date_time=(2026, 10, 25, 0, 0, 0))
             entry.create_system = 3
             entry.external_attr = 0o100644 << 16
             entry.compress_type = zipfile.ZIP_DEFLATED

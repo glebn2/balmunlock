@@ -89,7 +89,7 @@ def main():
     for name in ("README.md", "README.en.md", "LICENSE"):
         shutil.copy2(ROOT / name, output / name)
     (output / "recovery").mkdir()
-    for name in ("README.md", "INSTALL.md", "CHANGELOG-20261024.md"):
+    for name in ("README.md", "INSTALL.md", "CHANGELOG-20261024.md", "CHANGELOG-20261025.md"):
         shutil.copy2(ROOT / "recovery" / name, output / "recovery" / name)
     if recovery_source is not None:
         bundled_image = output / "recovery" / IMAGE_NAME
