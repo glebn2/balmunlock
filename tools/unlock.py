@@ -1140,7 +1140,7 @@ def main():
     parser.add_argument("--session", metavar="SERIAL_OR_KEY", help=help_text("выбрать сохранённый сеанс; legacy — старые файлы рядом с программой", "select a saved session; legacy selects older files beside the program"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--unlock", action="store_true", help=help_text("перейти к разблокировке без стартового меню", "open the unlock workflow without the start menu"))
-    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить TWRP на уже разблокированный A101BM или X01A, включая LineageOS, слот b", "install TWRP on an already unlocked A101BM or X01A, including LineageOS, slot b"))
+    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить TWRP в активный слот уже разблокированного A101BM или X01A, включая LineageOS", "install TWRP in the active slot of an already unlocked A101BM or X01A, including LineageOS"))
     mode.add_argument("--unlock-and-recovery", action="store_true", help=help_text("разблокировать загрузчик, затем установить TWRP на тот же телефон", "unlock the bootloader, then install TWRP on the same phone"))
     mode.add_argument("--check-recovery-image", action="store_true", help=help_text("проверить образ TWRP на ПК, без ADB/USB", "verify the TWRP image on the host, without ADB/USB"))
     parser.add_argument("--recovery-image", type=Path, help=help_text("путь к образу TWRP; для другой сборки выводится предупреждение", "TWRP image path; another build displays a warning"))

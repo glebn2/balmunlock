@@ -179,7 +179,9 @@ Both **A101BM and X01A** are supported on stock Android and custom ROMs,
 including LineageOS. Android version and system fingerprint do not restrict
 recovery installation.
 
-Use an unlocked bootloader with active slot **b**. Connect the phone from running
+Use an unlocked bootloader. The installer automatically detects active slot
+**a or b** and uses its `recovery_a` or `recovery_b`, without switching slots.
+Connect the phone from running
 Android with USB debugging authorized and select **2 — TWRP only**.
 For direct launch: `.\balmunlock.exe --install-recovery`.
 Confirm with `yes`; choose **Keep Read Only** if TWRP prompts on the phone.
@@ -187,12 +189,14 @@ Confirm with `yes`; choose **Keep Read Only** if TWRP prompts on the phone.
 The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261025)**. Root, Magisk,
 GSI, another unlock and a factory reset are not required to install it.
 
-The installer temporarily boots TWRP, backs up recovery_b to the PC, verifies
-the backup, flashes recovery_b and checks the partition hash. The utility then
+The installer temporarily boots TWRP, backs up the active slot's recovery to the
+PC, verifies the backup, flashes the same partition and checks its hash. The slot
+is bound at the start and checked again across mode transitions. The utility then
 finishes with the phone in TWRP. Choose Reboot → System to boot Android.
 Boot, vbmeta and the other slot are left as they are.
 An already installed identical TWRP is not flashed again.
-Installation and updates through the utility were also tested on A101BM running LineageOS / Android 17.
+Installation and updates through the utility were tested on A101BM running
+LineageOS / Android 17 in slot b; slot a support has been checked with simulated devices.
 
 Backups and logs are saved under `recovery-sessions/device-…/<UTC>-<id>/`.
 Keep a separate copy. When updating TWRP, the backup contains the previous
@@ -372,7 +376,7 @@ The original method uses CVE-2024-31317 to execute a preparation command as uid=
 
 This fork adds serial binding across ADB/DIAG/fastboot, model/build checks, an early fastboot check, two backups, live-partition validation before writing, a state receipt, a process lock, cancellation handling and bounded automatic rollback. Temporary CVE settings are cleaned up with verification; unfinished cleanup retains a receipt.
 
-The DIAG shell is subject to SELinux and is not universal root. Unlocking restores the original `chkcode`; TWRP installation writes `recovery_b`. GSI, boot/system/super or GPT flashing, relocking, slot changes and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
+The DIAG shell is subject to SELinux and is not universal root. Unlocking restores the original `chkcode`; TWRP installation writes the active slot's recovery (`recovery_a` or `recovery_b`). GSI, boot/system/super or GPT flashing, relocking, slot changes and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
 
 Operation progress and verification results are logged. If the connection
 is interrupted, restore it and continue the saved session: the utility uses

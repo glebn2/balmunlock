@@ -8,7 +8,7 @@ on:
     inputs:
       release_tag:
         description: Release tag matching runtime_paths.VERSION
-        default: v0.5.3
+        default: v0.6.0
         required: true
         type: string
       publish_release:

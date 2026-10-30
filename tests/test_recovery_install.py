@@ -101,7 +101,7 @@ class FakeDevice:
         self.image = image
         self.mode = "device"
         self.calls = []
-        self.partition = b"original" * 512
+        self.partitions = {"recovery_a": b"other___" * 512, "recovery_b": b"original" * 512}
         self.temporary = {}
         self.unlocked = "yes"
         self.userspace = "no"
@@ -142,6 +142,24 @@ class FakeDevice:
                            "ro.build.fingerprint": "BALMUDA/X01A/X01A:12/SKQ1.220303.001/1.280MI.0648.a:user/release-keys",
                            "ro.vendor.build.fingerprint": "BALMUDA/X01A/X01A:11/RKQ1.220301.001/1.280MI.0648.a:user/release-keys"})
 
+    @property
+    def partition(self):
+        return self.partitions["recovery_" + self.slot]
+
+    @partition.setter
+    def partition(self, data):
+        self.partitions["recovery_" + self.slot] = data
+
+    def use_slot(self, slot):
+        self.slot = slot
+        self.props["ro.boot.slot_suffix"] = "_" + slot
+        self.recovery_props["ro.boot.slot_suffix"] = "_" + slot
+
+    def block_data(self, path):
+        prefix = "/dev/block/by-name/"
+        assert path.startswith(prefix), path
+        return self.partitions[path.removeprefix(prefix)]
+
     def use_lineage(self, model="A101BM", vendor="A101BM"):
         # Values from the 20261025 Lineage target-files: SDK 37 in system and vendor.
         self.props.update({"ro.product.model": model, "ro.product.vendor.model": vendor,
@@ -179,6 +197,7 @@ class FakeDevice:
                     values = {"is-userspace": self.userspace, "unlocked": self.unlocked,
                               "current-slot": self.slot, "product": "lito", "slot-count": "2",
                               "snapshot-update-status": self.snapshot,
+                              "partition-size:recovery_a": hex(self.partition_size),
                               "partition-size:recovery_b": hex(self.partition_size)}
                     err = f"(bootloader) {name}: {values[name]}\nFinished. Total time: 0.001s\n"
                     if name == "unlocked" and self.fallback:
@@ -194,12 +213,12 @@ class FakeDevice:
                         self.mode = "recovery"
                         self.usb_transition_polls = self.usb_transition_after_boot
                 elif command[0] == "flash":
-                    assert command[1] == "recovery_b", args
+                    assert command[1] in self.partitions, args
                     if self.cancel_flash:
                         self.flow.signals.handle(self.cancel_flash, None)
-                    self.partition = Path(command[2]).read_bytes()
+                    self.partitions[command[1]] = Path(command[2]).read_bytes()
                     if self.flash_failure or self.readback_bad:
-                        self.partition = b"?" * len(self.partition)
+                        self.partitions[command[1]] = b"?" * len(self.partitions[command[1]])
                     rc = 1 if self.flash_failure else 0
                 elif command == ["reboot", "recovery"]:
                     self.mode = "recovery"
@@ -219,16 +238,16 @@ class FakeDevice:
                 self.mode = self.android_reboot_mode
             elif command == ["shell", "id", "-u"]:
                 out = "0\n"
-            elif command == ["shell", "blockdev", "--getsize64", recovery.BLOCK]:
-                out = str(len(self.partition)) + "\n"
+            elif command[:3] == ["shell", "blockdev", "--getsize64"]:
+                out = str(len(self.block_data(command[3]))) + "\n"
             elif command[:2] == ["shell", "sha256sum"]:
                 path = command[2]
-                data = self.partition if path == recovery.BLOCK else self.temporary[path]
+                data = self.block_data(path) if path.startswith("/dev/block/by-name/") else self.temporary[path]
                 out = f"{hashlib.sha256(data).hexdigest()}  {path}\n"
             elif command[0] == "shell" and command[1].startswith("dd "):
-                assert f"if={recovery.BLOCK} " in command[1]
+                block = next(item[3:] for item in command[1].split() if item.startswith("if="))
                 name = next(item[3:] for item in command[1].split() if item.startswith("of="))
-                self.temporary[name] = self.partition
+                self.temporary[name] = self.block_data(block)
             elif command[0] == "pull":
                 Path(command[2]).write_bytes(b"bad" if self.pull_bad else self.temporary[command[1]])
             elif command[:2] == ["shell", "rm"]:
@@ -368,7 +387,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.host.calls)
 
     def test_other_device_platform_serial_and_slot_refuse_before_reboot(self):
-        for key, value in (("ro.product.vendor.device", "OTHER"), ("ro.boot.slot_suffix", "_a"),
+        for key, value in (("ro.product.vendor.device", "OTHER"), ("ro.boot.slot_suffix", "_c"),
                            ("ro.board.platform", "other"), ("ro.boot.serialno", "OTHER"),
                            ("sys.boot_completed", "0")):
             before = self.host.props[key]
@@ -426,6 +445,95 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.flow.execute(), 0)
         self.assertFalse(self.writes())
         self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_active_a_recovery_update_preserves_b_and_backs_up_a(self):
+        self.host.use_lineage()
+        self.host.use_slot("a")
+        original_a = self.host.partitions["recovery_a"]
+        original_b = self.host.partitions["recovery_b"]
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.flow.state["slot"], "a")
+        self.assertEqual(self.flow.state["partition"], "recovery_a")
+        self.assertEqual(self.flow.state["backup"], "recovery_a.before-install.img")
+        self.assertEqual((self.flow.folder / self.flow.state["backup"]).read_bytes(), original_a)
+        self.assertEqual(self.host.partitions["recovery_a"], self.data)
+        self.assertEqual(self.host.partitions["recovery_b"], original_b)
+        self.assertEqual(self.writes()[0][0][3:5], ["flash", "recovery_a"])
+        self.assertFalse(any("recovery_b" in str(args) for args, _ in self.host.calls))
+        self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_active_a_matching_image_skips_flash_and_preserves_b(self):
+        self.host.use_lineage()
+        self.host.use_slot("a")
+        self.host.partitions["recovery_a"] = self.data
+        original_b = self.host.partitions["recovery_b"]
+        self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.flow.state["partition"], "recovery_a")
+        self.assertEqual(self.host.partitions["recovery_b"], original_b)
+        self.assertFalse(self.writes())
+        self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_invalid_slot_suffix_is_rejected_before_any_reboot(self):
+        for suffix in ("", "a", "_c", "_a;reboot", None):
+            with self.subTest(suffix=suffix):
+                if suffix is None:
+                    self.host.props.pop("ro.boot.slot_suffix", None)
+                else:
+                    self.host.props["ro.boot.slot_suffix"] = suffix
+                with self.assertRaises(recovery.RecoveryError):
+                    self.flow.execute()
+        self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+        self.assertIsNone(self.flow.folder)
+
+    def test_slot_is_bound_across_android_identity_checks(self):
+        self.host.use_slot("a")
+        self.flow.select_android()
+        self.host.use_slot("b")
+        with self.assertRaisesRegex(recovery.RecoveryError, "slot changed"):
+            self.flow.android_identity()
+        self.assertEqual(self.flow.partition, "recovery_a")
+        self.assertFalse(self.reboots())
+        self.assertFalse(self.writes())
+
+    def test_wrong_ram_boot_slot_stops_before_backup_or_flash(self):
+        self.host.use_slot("a")
+        self.host.recovery_props["ro.boot.slot_suffix"] = "_b"
+        before = self.host.partitions.copy()
+        with self.assertRaises(recovery.RecoveryError):
+            self.flow.execute()
+        self.assertFalse(self.writes())
+        self.assertEqual(self.host.partitions, before)
+        self.assertFalse(any("dd if=" in str(args) for args, _ in self.host.calls))
+
+    def test_readback_hash_cannot_be_misattributed_to_the_other_partition(self):
+        self.host.use_slot("a")
+        original = self.host.run
+        def wrong_path(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args))[3:] == ["shell", "sha256sum", "/dev/block/by-name/recovery_a"]:
+                result.stdout = result.stdout.replace("recovery_a", "recovery_b")
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=wrong_path), self.assertRaises(recovery.RecoveryError):
+            self.flow.execute()
+        self.assertFalse(self.writes())
+
+    def test_slot_change_after_flash_is_reported_without_a_second_write(self):
+        self.host.use_slot("a")
+        before_b = self.host.partitions["recovery_b"]
+        original = self.host.run
+        def changed(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args))[3:4] == ["flash"]:
+                self.host.use_slot("b")
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=changed), self.assertRaises(recovery.RecoveryError):
+            self.flow.execute()
+        self.assertEqual(len(self.writes()), 1)
+        self.assertEqual(self.host.partitions["recovery_a"], self.data)
+        self.assertEqual(self.host.partitions["recovery_b"], before_b)
+        self.assertTrue(self.flow.state["flash_may_have_changed"])
+        self.assertNotEqual(self.flow.state["phase"], "completed")
 
     def test_english_lineage_matching_image_finishes_with_english_instructions(self):
         self.host.use_lineage()
@@ -650,6 +758,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.writes())
         self.assertTrue((self.flow.folder / self.flow.state["backup"]).exists())
 
+    def test_active_a_slot_change_after_backup_prevents_flash(self):
+        self.host.use_slot("a")
+        before = self.host.partitions.copy()
+        original = self.host.run
+        def changed(args, **kwargs):
+            result = original(args, **kwargs)
+            if list(map(str, args))[3:4] == ["pull"]:
+                self.host.use_slot("b")
+            return result
+        with patch.object(recovery.subprocess, "run", side_effect=changed), self.assertRaises(recovery.RecoveryError):
+            self.flow.execute()
+        self.assertFalse(self.writes())
+        self.assertEqual(self.host.partitions, before)
+        self.assertEqual((self.flow.folder / self.flow.state["backup"]).read_bytes(), before["recovery_a"])
+
     def test_missing_recovery_after_ram_boot_times_out_without_flash(self):
         original = self.host.run
         def disappears(args, **kwargs):
@@ -856,6 +979,20 @@ class CombinedTests(unittest.TestCase):
         self.assertEqual(self.combo(), 0)
         self.assertEqual(len(self.writes()), 1)
         self.assertEqual(self.flow.state["phase"], "completed")
+
+    def test_fresh_unlock_on_slot_a_installs_only_recovery_a(self):
+        self.host.use_slot("a")
+        before_b = self.host.partitions["recovery_b"]
+        self.assertEqual(self.combo(fresh=True), 0)
+        self.assertEqual(self.flow.state["partition"], "recovery_a")
+        self.assertEqual(self.writes()[0][0][3:5], ["flash", "recovery_a"])
+        self.assertEqual(self.host.partitions["recovery_b"], before_b)
+
+    def test_slot_change_during_unlock_stops_before_recovery_boot(self):
+        self.host.use_slot("a")
+        self.assertEqual(self.combo(fresh=True, after_unlock=lambda: self.host.use_slot("b")), 1)
+        self.assertFalse(self.writes())
+        self.assertFalse(any(args[3:4] == ["boot"] for args, _ in self.host.calls))
 
     def test_x01a_combined_flow_continues_after_completed_or_fresh_unlock(self):
         self.host.use_x01a()

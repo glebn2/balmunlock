@@ -1,36 +1,24 @@
-balmunlock 0.5.3 — TWRP installation from custom Android
+balmunlock 0.6.0 — TWRP in the active slot
 
-Fix option 2 refusing LineageOS / Android 17 (SDK 37) before entering the bootloader.
-Recovery installation now identifies BALMUDA Phone from vendor device properties
-and the lito platform. It no longer requires the stock system SDK, incremental
-build or system/vendor fingerprint. Mixed A101BM system branding and X01A vendor
-are supported. Recovery installation finishes in TWRP after readback verification.
+TWRP installation and updates now automatically select recovery_a or recovery_b
+from the running Android slot. Both option 2 (TWRP only) and option 3 (unlock +
+TWRP) use the same slot binding. No manual slot selection or slot switching.
 
-Handle the Windows fastboot placeholder "???????????? fastboot" during USB
-mode switches. Wait for the already selected serial instead of failing device
-list parsing; never select or send commands to the placeholder. Other identified
-phones and malformed replies still stop the operation.
+The slot is bound before confirmation and checked again in bootloader and TWRP.
+Backup, partition-size checks, flashing and SHA-256 readback all use the same
+partition. A missing/invalid suffix or a slot change stops the operation.
+The other recovery partition is untouched; identical images are not reflashed.
 
-Finish successfully in TWRP after installation or a matching-image check.
-Do not request an Android reboot or poll for Android boot after recovery is
-verified. The receipt records final_mode=recovery. Choose Reboot -> System
-in TWRP to boot Android manually.
+Slot b installation was tested on A101BM. Slot a support is host-tested with
+independent simulated recovery_a/recovery_b partitions; no slot a hardware test
+is claimed. This does not modify super or prepare logical partitions for LineageOS.
 
-Installation and TWRP updates were verified on A101BM running LineageOS /
-Android 17, including replacing an existing TWRP and skipping an identical image.
-Russian and English prompts and documentation describe the same workflow.
+Unlocking retains the stock Android 12 / 1.280 policy. Recovery installation
+also works from custom Android, including LineageOS. It completes in TWRP;
+choose Reboot -> System to boot Android. Retain sessions/ and recovery-sessions/.
 
-Bootloader unlocking retains its stock Android 12 policy. The combined unlock
-workflow still requires stock Android before the unlock stage; use option 2 for
-an already unlocked phone running a custom ROM.
-
-Bootloader unlock state, serial, slot b, snapshot state, partition size, recovery
-backup and selected-image readback checks remain in place. TWRP is unchanged:
-3.7.1_12-BALMUDA_Phone (20261025), SHA-256:
+Bundled TWRP is unchanged: 3.7.1_12-BALMUDA_Phone (20261025), image SHA-256:
 9e4d0c0707d83a6a3d5ec3fcad4c2f3296996348603817163540ddad7a840702
 
-Retain sessions/ and recovery-sessions/ when updating.
-
-Download packages contain only the utility, runtime dependencies, USB driver
-preset and recovery image. Documentation, changelogs, source archives and build
-metadata are excluded. Repackaging does not change the executable or image.
+The ZIP contains only the utility, runtime dependencies, USB driver preset and
+recovery image. Documentation, changelogs, source ZIPs and build metadata stay out.
