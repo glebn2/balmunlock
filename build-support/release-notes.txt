@@ -1,24 +1,31 @@
-balmunlock 0.6.0 — TWRP in the active slot
+balmunlock 0.7.0 — ADB root unlock and TWRP slot selection
 
-TWRP installation and updates now automatically select recovery_a or recovery_b
-from the running Android slot. Both option 2 (TWRP only) and option 3 (unlock +
-TWRP) use the same slot binding. No manual slot selection or slot switching.
+The stock unlock path is checked first. Unsupported systems, or a failure of
+stock access preparation before backups, can use an existing rooted ADB daemon.
+Enable Rooted debugging in LineageOS developer settings. The utility verifies
+UID 0, the BALMUDA/lito identity, serial and the fixed chkcode partition size.
+It preserves two checked originals, verifies the marker and restores the original
+through the existing fastboot flow. If TWRP starts after unlock confirmation,
+the app returns to the bootloader and confirms unlocked state before restoring.
+Root does not remove the unlock data wipe. If Android returns to recovery with
+init_user0_failed, use Wipe -> Format Data to recreate encryption keys.
+No access-method fallback occurs after backup creation or a marker write.
 
-The slot is bound before confirmation and checked again in bootloader and TWRP.
-Backup, partition-size checks, flashing and SHA-256 readback all use the same
-partition. A missing/invalid suffix or a slot change stops the operation.
-The other recovery partition is untouched; identical images are not reflashed.
+Both TWRP menu options offer the current slot by default. Enter a or b before
+confirming to select another slot. The utility verifies bootloader state and
+snapshot status, switches the active slot, confirms it, then backs up, flashes
+and reads back only the chosen recovery partition. This also changes the next
+Android boot slot; Android/super in the other slot are not prepared or verified.
+An unexpected slot change stops the operation. There is no automatic switch back.
 
-Slot b installation was tested on A101BM. Slot a support is host-tested with
-independent simulated recovery_a/recovery_b partitions; no slot a hardware test
-is claimed. This does not modify super or prepare logical partitions for LineageOS.
-
-Unlocking retains the stock Android 12 / 1.280 policy. Recovery installation
-also works from custom Android, including LineageOS. It completes in TWRP;
-choose Reboot -> System to boot Android. Retain sessions/ and recovery-sessions/.
-
-Bundled TWRP is unchanged: 3.7.1_12-BALMUDA_Phone (20261025), image SHA-256:
-9e4d0c0707d83a6a3d5ec3fcad4c2f3296996348603817163540ddad7a840702
+Explicit b -> a slot switching, backup, installation and booting the flashed TWRP
+were tested on A101BM. Root unlock was exercised on A101BM; the automatic recovery
+handoff has simulation coverage. Existing slot b install/update testing also applies.
+Bundled TWRP is updated to 3.7.1_12-BALMUDA_Phone (20261031), with the lptools fix
+for creating an empty logical partition. Image structure, patched ramdisk binary
+and unchanged stock kernel/DTB/DTBO are checked on the host; this new image has
+not been hardware-tested separately. Image SHA-256:
+acaa0293a06de39f4aca98af61e31fb7f56485828fa3f69179b10011f9993e08
 
 The ZIP contains only the utility, runtime dependencies, USB driver preset and
-recovery image. Documentation, changelogs, source ZIPs and build metadata stay out.
+recovery image. Keep sessions/ and recovery-sessions/. Completion stays in TWRP.

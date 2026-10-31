@@ -206,6 +206,8 @@ class FakeDevice:
                         err += "unlocked: no\n"
                 elif command == ["oem", "device-info"]:
                     err = "(bootloader) Device unlocked: true\n"
+                elif command[0].startswith("--set-active="):
+                    self.use_slot(command[0].split("=", 1)[1])
                 elif command[0] == "boot":
                     if self.fail_ram_boot:
                         rc = 1
@@ -315,6 +317,92 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(any("su" in args or "root" in args or "set_active" in args or "flashing" in args
                              or "--disable-verity" in args or "--disable-verification" in args for args, _ in self.host.calls))
         self.assertFalse((self.root / "sessions").exists())
+
+    def test_explicit_slot_a_switches_before_boot_and_backs_up_only_a(self):
+        before_a = self.host.partitions["recovery_a"]
+        before_b = self.host.partitions["recovery_b"]
+        with patch("builtins.input", side_effect=["a", "yes"]):
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.host.slot, "a")
+        self.assertEqual(self.flow.state["initial_slot"], "b")
+        self.assertTrue(self.flow.state["slot_switch_requested"])
+        self.assertEqual(self.flow.state["partition"], "recovery_a")
+        self.assertEqual((self.flow.folder / self.flow.state["backup"]).read_bytes(), before_a)
+        self.assertEqual(self.host.partitions["recovery_a"], self.data)
+        self.assertEqual(self.host.partitions["recovery_b"], before_b)
+        commands = [args[3:] for args, _ in self.host.calls if args[0] == "fastboot" and len(args) > 3]
+        self.assertEqual(sum(command == ["--set-active=a"] for command in commands), 1)
+        self.assertLess(commands.index(["--set-active=a"]), next(i for i, cmd in enumerate(commands) if cmd[0] == "boot"))
+
+    def test_explicit_slot_b_from_a_preserves_a(self):
+        self.host.use_slot("a")
+        before_a = self.host.partitions["recovery_a"]
+        with patch("builtins.input", side_effect=["b", "yes"]):
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.host.slot, "b")
+        self.assertEqual(self.host.partitions["recovery_a"], before_a)
+        self.assertEqual(self.writes()[0][0][3:5], ["flash", "recovery_b"])
+
+    def test_declining_chosen_slot_sends_no_reboot_or_slot_change(self):
+        with patch("builtins.input", side_effect=["a", "no"]):
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertFalse(self.reboots())
+        self.assertFalse(any("--set-active=a" in args for args, _ in self.host.calls))
+
+    def test_slot_switch_not_confirmed_stops_before_twrp_or_flash(self):
+        original_run = self.host.run
+        def no_switch(args, **kwargs):
+            if "--set-active=a" in args:
+                self.host.calls.append((args, kwargs))
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return original_run(args, **kwargs)
+        with patch("builtins.input", side_effect=["a", "yes"]), \
+                patch.object(recovery.subprocess, "run", side_effect=no_switch):
+            with self.assertRaises(recovery.RecoveryError):
+                self.flow.execute()
+        self.assertFalse(self.writes())
+        self.assertFalse(any(args[3:4] == ["boot"] for args, _ in self.host.calls))
+
+    def test_locked_or_pending_snapshot_prevents_explicit_slot_switch(self):
+        for attribute, value in (("unlocked", "no"), ("snapshot", "merging")):
+            with self.subTest(attribute=attribute):
+                self.flow = recovery.RecoveryInstaller(self.root)
+                self.flow.env.pop("ANDROID_SERIAL", None)
+                self.host.flow = self.flow
+                previous = getattr(self.host, attribute)
+                setattr(self.host, attribute, value)
+                with patch("builtins.input", side_effect=["a", "yes"]):
+                    with self.assertRaises(recovery.RecoveryError):
+                        self.flow.execute()
+                self.assertFalse(any("--set-active=a" in args for args, _ in self.host.calls))
+                self.assertFalse(self.writes())
+                setattr(self.host, attribute, previous)
+
+    def test_failed_slot_switch_does_not_retry_or_flash(self):
+        original_run = self.host.run
+        def failed_switch(args, **kwargs):
+            result = original_run(args, **kwargs)
+            if "--set-active=a" in args:
+                result.returncode = 1  # A lost reply may follow a real slot change.
+            return result
+        with patch("builtins.input", side_effect=["a", "yes"]), \
+                patch.object(recovery.subprocess, "run", side_effect=failed_switch):
+            with self.assertRaises(recovery.RecoveryError):
+                self.flow.execute()
+        self.assertEqual(self.host.slot, "a")
+        self.assertEqual(self.flow.state["phase"], "slot_switch_started")
+        self.assertEqual(sum("--set-active=a" in args for args, _ in self.host.calls), 1)
+        self.assertFalse(self.writes())
+
+    def test_explicit_slot_with_identical_twrp_switches_and_skips_flash(self):
+        self.host.partitions["recovery_a"] = self.data
+        before_b = self.host.partitions["recovery_b"]
+        with patch("builtins.input", side_effect=["a", "yes"]):
+            self.assertEqual(self.flow.execute(), 0)
+        self.assertEqual(self.host.slot, "a")
+        self.assertEqual(self.host.partitions["recovery_b"], before_b)
+        self.assertFalse(self.writes())
+        self.assertEqual(self.flow.state["phase"], "completed")
 
     def test_bad_artifact_refuses_before_any_device_discovery(self):
         self.image.write_bytes(b"bad")
@@ -988,6 +1076,14 @@ class CombinedTests(unittest.TestCase):
         self.assertEqual(self.writes()[0][0][3:5], ["flash", "recovery_a"])
         self.assertEqual(self.host.partitions["recovery_b"], before_b)
 
+    def test_combined_can_explicitly_switch_slot_after_unlock(self):
+        before_b = self.host.partitions["recovery_b"]
+        with patch("builtins.input", side_effect=["yes", "a", "yes"]):
+            self.assertEqual(self.combo(fresh=True), 0)
+        self.assertEqual(self.host.slot, "a")
+        self.assertEqual(self.flow.state["partition"], "recovery_a")
+        self.assertEqual(self.host.partitions["recovery_b"], before_b)
+
     def test_slot_change_during_unlock_stops_before_recovery_boot(self):
         self.host.use_slot("a")
         self.assertEqual(self.combo(fresh=True, after_unlock=lambda: self.host.use_slot("b")), 1)
@@ -1086,8 +1182,7 @@ class CombinedTests(unittest.TestCase):
         self.assertIsNone(self.unlock_stage)
         self.assertFalse(self.writes())
 
-    def test_combined_unlock_on_lineage_stops_before_unlock_stage(self):
+    def test_combined_lineage_delegates_unlock_admission_to_unlock_workflow(self):
         self.host.use_lineage()
-        self.assertEqual(self.combo(), 1)
-        self.assertIsNone(self.unlock_stage)
-        self.assertFalse(self.writes())
+        self.assertEqual(self.combo(), 0)
+        self.assertTrue(self.unlock_stage.guided_called)

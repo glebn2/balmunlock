@@ -20,6 +20,26 @@ class ConsoleTests(WorkflowFixture):
         self.args = types.SimpleNamespace(session=None, recover=False, prepare=False, unlock_prepared=False)
         self.enter(patch.object(unlock, "preflight", return_value=True))
 
+    def test_custom_android_unlock_refusal_is_actionable_in_both_languages(self):
+        self.host.properties["ro.build.version.sdk"] = "37"
+        self.host.properties["ro.build.version.incremental"] = "1793042296"
+        self.host.properties["ro.build.version.security_patch"] = "2026-10-01"
+        for lang, reason in (("ru", "Анлок требует штатного Android 12"),
+                             ("en", "Unlocking requires stock Android 12")):
+            with self.subTest(lang=lang):
+                self.flow.lang = lang
+                errors = io.StringIO()
+                with patch("builtins.input", side_effect=["yes", "no"]), \
+                        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+                    self.assertEqual(self.flow.guided(self.args), 1)
+                self.assertIn(reason, errors.getvalue())
+                self.assertIn("37", errors.getvalue())
+                self.assertIn("пункт 2" if lang == "ru" else "option 2", errors.getvalue())
+        self.assertFalse(self.flow.backup.exists())
+        self.assertFalse(self.flashed())
+        self.assertFalse(any(args[0] in (unlock.sys.executable, "fastboot")
+                             for args, _ in self.host.calls))
+
     def noisy_probe(self):
         original = self.host.run
         def run(args, **kwargs):

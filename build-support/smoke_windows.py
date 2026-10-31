@@ -82,7 +82,7 @@ def main():
         preflight = run(exe, "--preflight", "--lang", "en")
         assert "libusb: available" in preflight and str(app / "platform-tools") in preflight, preflight
         for helper in ("cve31317.py", "kdiag_shell.py", "backup_chkcode.py", "unlock_chkcode.py",
-                       "restore_chkcode.py", "chkcode_backup.py", "diag_probe.py", "verify_chkcode.py"):
+                       "restore_chkcode.py", "chkcode_backup.py", "diag_probe.py", "verify_chkcode.py", "rooted_chkcode.py"):
             run(exe, "--internal-tool", helper, "--help")
         run(exe, "--internal-tool", "unknown.py", expected=2)
         assert "printf" in run(exe, "--internal-tool", "cve31317.py", "--encode", "diag,modem,adb")

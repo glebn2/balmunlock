@@ -1,7 +1,8 @@
 """Install the selected TWRP through a prepared, already unlocked bootloader.
 
 This workflow never invokes unlock helpers, DIAG, root preparation, or AVB flags.
-Only the recovery partition of the selected active slot is written; no auto-restore.
+Only the selected recovery partition is written. An explicit slot choice can
+change the active boot slot; there is no automatic restore or second flash.
 """
 from datetime import datetime, timezone
 import json
@@ -49,6 +50,8 @@ class RecoveryInstaller:
         self.lang, self.interactive, self.verbose = lang, interactive, verbose
         self.serial = None
         self.slot = None
+        self.initial_slot = None
+        self.slot_switch_pending = False
         self.device_model = None
         self.android_build = None
         self.android_details = {}
@@ -62,7 +65,7 @@ class RecoveryInstaller:
         self.env = os.environ.copy()
 
     def say(self, ru, en):
-        print(ru if self.lang == "ru" else en, flush=True)
+        print("\n" + (ru if self.lang == "ru" else en), flush=True)
 
     def fail(self, ru, en):
         raise RecoveryError(en, ru)
@@ -155,6 +158,8 @@ class RecoveryInstaller:
             self.fail("Активный слот изменился в ходе установки. Начните новый запуск из Android.",
                       "Active slot changed during installation. Start a new run from Android.")
         self.slot = slot
+        if self.initial_slot is None:
+            self.initial_slot = slot
 
     @property
     def partition(self):
@@ -225,7 +230,7 @@ class RecoveryInstaller:
         reply = self.fb("getvar", name)
         return single_value(reply.stdout + "\n" + reply.stderr, name)
 
-    def check_bootloader(self):
+    def check_bootloader(self, allow_slot_switch=False):
         self.wait("fastboot", 300)
         if self.getvar("is-userspace") != "no":
             self.fail("Нужен загрузчик, а не fastbootd.", "Bootloader required, not fastbootd.")
@@ -238,7 +243,8 @@ class RecoveryInstaller:
         if value.lower() not in ("yes", "true"):
             self.fail("Установка доступна только с разблокированным загрузчиком. Анлок не запускается.",
                       "Recovery requires an unlocked bootloader. Unlocking will not be started.")
-        expected = {"product": "lito", "current-slot": self.slot, "slot-count": "2",
+        expected_slot = self.initial_slot if allow_slot_switch and self.slot_switch_pending else self.slot
+        expected = {"product": "lito", "current-slot": expected_slot, "slot-count": "2",
                     "snapshot-update-status": "none"}
         for key, value in expected.items():
             if self.getvar(key) != value:
@@ -249,6 +255,18 @@ class RecoveryInstaller:
             raise RecoveryError("Invalid recovery partition size", "Некорректный размер раздела recovery") from error
         if size != IMAGE_SIZE:
             self.fail(f"Размер {self.partition} отличается от ожидаемого.", f"Unexpected {self.partition} size.")
+        if allow_slot_switch and self.slot_switch_pending:
+            self.say(f"Переключаю активный слот {self.initial_slot} → {self.slot}.",
+                     f"Switching the active slot {self.initial_slot} -> {self.slot}.")
+            with self.signals.defer():
+                self.save("slot_switch_started", slot_switch_may_have_changed=True)
+                self.fb("--set-active=" + self.slot)
+                if self.getvar("current-slot") != self.slot:
+                    self.fail("Загрузчик не подтвердил выбранный слот. Установка остановлена.",
+                              "Bootloader did not confirm the selected slot. Installation stopped.")
+                self.slot_switch_pending = False
+                self.save("slot_switch_verified", active_slot=self.slot)
+            self.signals.checkpoint()
 
     def check_twrp(self):
         self.wait("recovery", 120)
@@ -315,6 +333,7 @@ class RecoveryInstaller:
         self.save("confirmed", image_sha256=self.image_hash, image_bytes=IMAGE_SIZE,
                   source_filename=self.source_name, image_file="recovery.img",
                   bundled_image=(self.image_hash == IMAGE_SHA256),
+                  initial_slot=self.initial_slot, slot_switch_requested=self.slot_switch_pending,
                   partition=self.partition, block_device=self.block, **self.android_details,
                   **({"stock_model": self.device_model, "stock_build": self.android_build} if self.is_stock else {}))
 
@@ -355,12 +374,29 @@ class RecoveryInstaller:
                      "Warning: this image differs from the bundled TWRP. "
                      "Confirmation below authorizes installing the selected file.")
         android_label = self.android_details["android_release"] or "SDK " + self.android_details["android_sdk"]
-        self.say(f"Установка TWRP: {self.device_model}, Android {android_label}, слот {self.slot}. Сохраню текущий recovery на ПК, затем заменю только {self.partition}. "
-                 "Сохраните важные данные отдельно. Продолжить? [yes/N]",
-                 f"Install TWRP: {self.device_model}, Android {android_label}, slot {self.slot}. Back up the current recovery, then replace {self.partition} only. "
-                 "Keep a separate copy of important data. Continue? [yes/N]")
-        if input().strip().lower() != "yes":
-            return 0
+        while True:
+            self.say(f"Установка TWRP: {self.device_model}, Android {android_label}, слот {self.slot}. "
+                     f"Сохраню recovery_{self.slot} на ПК, затем заменю только {self.partition}. Сохраните важные данные отдельно.",
+                     f"Install TWRP: {self.device_model}, Android {android_label}, slot {self.slot}. "
+                     f"Back up recovery_{self.slot} to the PC, then replace {self.partition} only. Keep important data separately.")
+            if self.slot != self.initial_slot:
+                self.say(f"Активный слот будет переключён с {self.initial_slot} на {self.slot}. "
+                         "Это также меняет слот следующей загрузки Android; его работоспособность программа не проверяет.",
+                         f"The active slot will change from {self.initial_slot} to {self.slot}. "
+                         "This also selects the next Android boot slot; the app does not check whether that Android boots.")
+            self.say(f"yes — установить в {self.slot}; a/b — выбрать слот; Enter/N — выход.",
+                     f"yes — install in {self.slot}; a/b — choose a slot; Enter/N — exit.")
+            answer = input().strip().lower()
+            if answer == "yes":
+                break
+            if answer in ("", "n", "no", "нет"):
+                return 0
+            if answer in ("a", "b"):
+                self.slot = answer
+                self.slot_switch_pending = self.slot != self.initial_slot
+                self.android_details["slot"] = self.slot
+                continue
+            self.say("Введите yes, a, b или нажмите Enter.", "Enter yes, a, b, or press Enter to exit.")
         self.create_folder()
         self.say(f"Бэкап и журнал: {self.folder}", f"Backup and log: {self.folder}")
         # Use an immutable per-run copy, so changing the source during the round-trip cannot change what is flashed.
@@ -373,7 +409,7 @@ class RecoveryInstaller:
                  "(Windows: WinUSB, tools/balmuda-fastboot.cfg preset). Waiting up to 5 minutes.")
         self.save("bootloader_requested")
         self.adb("reboot", "bootloader")
-        self.check_bootloader()
+        self.check_bootloader(allow_slot_switch=True)
         self.say("Временно загружаю TWRP для сохранения recovery. При вопросе на экране выберите Keep Read Only.",
                  "Temporarily booting TWRP to back up recovery. Select Keep Read Only if prompted on the phone.")
         self.save("ram_boot_requested")
@@ -403,10 +439,18 @@ class RecoveryInstaller:
                       f"Installed {self.partition} hash mismatch. Stop here.")
         self.save("partition_verified", installed_sha256=self.image_hash)
         self.save("completed", final_mode="recovery", recovery_ready=True)
-        self.say("Recovery проверен. Телефон остаётся в TWRP. "
-                 "Для загрузки Android выберите Reboot → System. Бэкап recovery сохранён.",
-                 "Recovery verified. Phone remains in TWRP. "
-                 "Choose Reboot -> System to boot Android. Recovery backup retained.")
+        if self.slot != self.initial_slot:
+            self.say(f"{self.partition} проверен. Телефон остаётся в TWRP, активный слот {self.slot}. "
+                     f"Прежний Android находится в слоте {self.initial_slot}; перед его запуском верните этот активный слот. "
+                     "Бэкап recovery сохранён.",
+                     f"{self.partition} verified. Phone remains in TWRP, active slot {self.slot}. "
+                     f"The previous Android is in slot {self.initial_slot}; select that active slot before booting it. "
+                     "Recovery backup retained.")
+        else:
+            self.say("Recovery проверен. Телефон остаётся в TWRP. "
+                     "Для загрузки Android выберите Reboot → System. Бэкап recovery сохранён.",
+                     "Recovery verified. Phone remains in TWRP. "
+                     "Choose Reboot -> System to boot Android. Recovery backup retained.")
         return 0
 
 

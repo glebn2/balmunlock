@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 APP_NAME = "balmunlock"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 HELPERS = {
     "cve31317.py": "cve31317",
     "kdiag_shell.py": "kdiag_shell",
@@ -14,6 +14,7 @@ HELPERS = {
     "chkcode_backup.py": "chkcode_backup",
     "diag_probe.py": "diag_probe",
     "verify_chkcode.py": "verify_chkcode",
+    "rooted_chkcode.py": "rooted_chkcode",
 }
 _DLL_HANDLES = []
 

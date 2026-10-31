@@ -102,6 +102,7 @@ class Workflow:
         self.already_unlocked_observed = False
         self.unlocked_this_run = False
         self.original = None
+        self.access_method = "diag"
         self.state = {}
         self.signals = OperationSignals(lang)
         self.env = os.environ.copy()
@@ -110,11 +111,11 @@ class Workflow:
         self.env["BALMUNLOCK_CONTROLLER"] = "1"
 
     def say(self, ru, en):
-        print(ru if self.lang == "ru" else en, flush=True)
+        print("\n" + (ru if self.lang == "ru" else en), flush=True)
 
     def introduce(self):
         if not self.introduced:
-            print(f"{APP_NAME} {VERSION}", flush=True)
+            print(f"{APP_NAME} {VERSION}\n", flush=True)
             self.introduced = True
 
     def show_directory(self):
@@ -136,7 +137,7 @@ class Workflow:
     def show_error(self, error):
         self.detail(f"ERROR {type(error).__name__}: {error}")
         label = "Причина" if self.lang == "ru" else "Reason"
-        print(f"{label}: {error_message(error, self.lang)}", file=sys.stderr, flush=True)
+        print(f"\n{label}: {error_message(error, self.lang)}", file=sys.stderr, flush=True)
         if self.verbose:
             print(str(error), file=sys.stderr, flush=True)
 
@@ -320,7 +321,8 @@ class Workflow:
         if name == "cve31317.py" and self.root != ROOT:
             args = (*args, "--state", str(self.root / STATE_NAME))
         # Never kill a partition-writing process on a host-side timer.
-        timeout = None if name in ("unlock_chkcode.py", "restore_chkcode.py") else 600
+        timeout = None if (name in ("unlock_chkcode.py", "restore_chkcode.py") or
+                           (name == "rooted_chkcode.py" and args[0] in ("mark", "restore"))) else 600
         if name == "diag_probe.py":
             timeout = 30
         # libusb opens all WinUSB interfaces of this composite device. The
@@ -360,6 +362,84 @@ class Workflow:
                 raise Stop(str(error)) from error
         self.signals.checkpoint()
         return cleaned
+
+    def root_identity(self, identity):
+        """Admit the physical BALMUDA family independently of custom OS branding."""
+        extra = ("ro.product.vendor.device", "ro.product.vendor.model", "ro.board.platform",
+                 "ro.boot.serialno", "sys.boot_completed")
+        for key in extra:
+            identity[key] = self.run(["adb", "-s", self.serial, "shell", "getprop", key]).stdout.strip()
+        model = identity["ro.product.vendor.device"] or identity["ro.product.vendor.model"] or identity["ro.product.model"]
+        if (model not in ("A101BM", "X01A") or identity["ro.board.platform"] != "lito" or
+                identity["ro.boot.serialno"] != self.serial or identity["sys.boot_completed"] != "1"):
+            raise Stop("Root unlock requires a fully booted BALMUDA Phone (lito) with a matching serial.",
+                       "Для root-анлока нужен полностью загруженный BALMUDA Phone (lito) с совпадающим серийным номером.")
+
+    def select_access(self, identity):
+        try:
+            validate_identity(identity, lang=self.lang)
+            self.access_method = "diag"
+        except ValueError as stock_error:
+            self.say("Штатный способ не подходит этой системе. Проверяю возможность анлока через ADB root.",
+                     "The stock method does not support this OS. Checking the ADB root unlock path.")
+            try:
+                self.root_identity(identity)
+            except Stop:
+                # Keep the original policy reason when the physical device is not admitted.
+                raise stock_error
+            self.access_method = "adb_root"
+
+    def ensure_root(self):
+        self.say("Проверяю ADB root. В LineageOS включите «Rooted debugging» / «Отладка с root» в настройках разработчика.",
+                 "Checking ADB root. Enable Rooted debugging in LineageOS developer options.")
+        self.run(["adb", "-s", self.serial, "root"], timeout=30, check=False)
+        self.select_adb(timeout=30)
+        deadline = time.monotonic() + 30
+        uid = None
+        while True:
+            try:
+                uid = self.run(["adb", "-s", self.serial, "shell", "id", "-u"], timeout=5, check=False)
+                if uid.returncode == 0 and uid.stdout.strip() == "0":
+                    break
+            except Stop:
+                pass  # adbd may still be restarting after the root request.
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(1)
+        if uid is None or uid.returncode or uid.stdout.strip() != "0":
+            raise Stop("ADB root is unavailable. Enable Rooted debugging, then retry. No marker write started.",
+                       "ADB root недоступен. Включите «Rooted debugging» в настройках разработчика и повторите. Метка не записывалась.")
+        serial = self.run(["adb", "-s", self.serial, "shell", "getprop", "ro.boot.serialno"]).stdout.strip()
+        if serial != self.serial:
+            raise Stop("Root ADB device identity changed; no write permitted.", "После ADB root изменился серийный номер. Запись запрещена.")
+
+    def prepare_access(self, identity=None, allow_fallback=False):
+        if self.access_method == "adb_root":
+            self.ensure_root()
+            return
+        try:
+            self.activate_diag()
+        except (Stop, ValueError) as error:
+            if isinstance(error, Declined) or not allow_fallback or self.marker_possible or self.backup_artifacts():
+                raise
+            # A failed stock preparation may leave temporary Android settings.
+            # Finish its cleanup before trying a different access method.
+            self.cleanup_cve()
+            self.say("Штатная подготовка не завершилась. Проверяю ADB root до создания бэкапов и записи метки.",
+                     "Stock preparation failed. Checking ADB root before backups or a marker write.")
+            self.root_identity(identity)
+            self.ensure_root()
+            self.access_method = "adb_root"
+
+    def chkcode_tool(self, action, path):
+        if self.access_method == "adb_root":
+            return self.tool("rooted_chkcode.py", action, "--backup", str(path))
+        names = {"backup": "backup_chkcode.py", "verify": "verify_chkcode.py",
+                 "mark": "unlock_chkcode.py", "restore": "restore_chkcode.py"}
+        if action == "backup":
+            return self.tool(names[action], "-o", str(path))
+        arguments = ("--backup", str(path)) + (("--yes",) if action in ("mark", "restore") else ())
+        return self.tool(names[action], *arguments)
 
     def fastboot(self, *args, timeout=10, check=True):
         return self.run(["fastboot", "-s", self.serial, *args], timeout, check)
@@ -489,9 +569,12 @@ class Workflow:
             raise Stop("Invalid recovery image hash.")
         if "reboot_pending" in state and not isinstance(state["reboot_pending"], bool):
             raise Stop("Invalid saved reboot state. Keep the original receipt.")
+        if state.get("access_method", "diag") not in ("diag", "adb_root"):
+            raise Stop("Invalid saved access method. Keep the original receipt.")
         if self.session_serial is not None and serial != self.session_serial:
             raise Stop("Recovery receipt belongs to a different session directory; no commands sent")
         self.state = state
+        self.access_method = state.get("access_method", "diag")
         self.serial = serial
         self.env["ANDROID_SERIAL"] = serial
         self.checked_original()
@@ -546,7 +629,7 @@ class Workflow:
                     with self.signals.defer():
                         self.save_state("rollback_diag_started")
                         # No automatic DIAG activation or reboot to obtain access.
-                        self.tool("restore_chkcode.py", "--backup", str(image), "--yes")
+                        self.chkcode_tool("restore", image)
                         self.marker_possible = False
                         self.save_state("rollback_diag_verified", reboot_pending=False)
                     self.signals.checkpoint()
@@ -603,6 +686,31 @@ class Workflow:
         while time.monotonic() < deadline:
             if self.fastboot_present() and self.unlocked() is True:
                 return
+            # Some custom recoveries start immediately after the unlock wipe.
+            # Return through ADB only for our device and verified marker, then
+            # prove the actual unlocked state in fastboot before continuing.
+            if self.access_method == "adb_root" and self.marker_verified:
+                rows = devices(self.run(["adb", "devices"], timeout=5, check=False).stdout)
+                if rows == [[self.serial, "recovery"]]:
+                    props = {}
+                    for key in ("ro.boot.serialno", "ro.boot.vbmeta.device_state",
+                                "ro.boot.verifiedbootstate", "ro.twrp.version"):
+                        props[key] = self.run(["adb", "-s", self.serial, "shell", "getprop", key],
+                                              timeout=5, check=False).stdout.strip()
+                    if props["ro.boot.serialno"] != self.serial:
+                        raise Stop("Recovery serial changed after unlocking. No reboot requested.",
+                                   "После анлока не совпал серийный номер recovery. Перезагрузка не запрашивалась.")
+                    if (props["ro.boot.vbmeta.device_state"] == "unlocked" and
+                            props["ro.boot.verifiedbootstate"] == "orange" and props["ro.twrp.version"]):
+                        self.say("После анлока запустился TWRP. Возвращаю телефон в загрузчик для проверки и снятия метки.",
+                                 "TWRP started after unlocking. Returning to the bootloader to verify unlock and restore the original.")
+                        self.save_state("unlock_recovery_observed")
+                        self.run(["adb", "-s", self.serial, "reboot", "bootloader"])
+                        self.wait_fastboot(timeout=120)
+                        if self.is_userspace() is not False or self.unlocked() is not True:
+                            raise Stop("Unlocked bootloader not confirmed after recovery. Starting rollback.",
+                                       "После recovery разблокированный загрузчик не подтверждён. Начинается откат.")
+                        return
             time.sleep(1)
         raise Stop("Unlock not confirmed within 300s. Starting recovery instead of continuing unlock.")
 
@@ -672,6 +780,11 @@ class Workflow:
                 raise Stop("Bootloader lock state unknown. No marker write.")
             if state:
                 raise AlreadyUnlocked("The bootloader is already unlocked. No unlock or marker write needed.")
+            if self.access_method == "adb_root":
+                product = self.fastboot("getvar", "product")
+                if not re.search(r"^\s*(?:\(bootloader\)\s*)?product:\s*lito\s*$",
+                                 product.stdout + "\n" + product.stderr, re.M):
+                    raise Stop("Root unlock requires the lito bootloader.", "Для root-анлока нужен загрузчик платформы lito.")
         except (Stop, KeyboardInterrupt):
             # This is the stock, marker-free device; return it to Android on refusal.
             # A failed return must not hide the original validation/cancellation error.
@@ -757,22 +870,22 @@ class Workflow:
                     "ro.build.version.security_patch", "ro.build.version.sdk"):
             result = self.run(["adb", "-s", self.serial, "shell", "getprop", key])
             identity[key] = result.stdout.strip()
-        validate_identity(identity, lang=self.lang)
+        self.select_access(identity)
         self.detail(json.dumps({"serial": self.serial, **identity}, ensure_ascii=False))
-        self.say(f"Телефон: {identity['ro.product.model']}, Android 12, прошивка {identity['ro.build.version.incremental']}.",
-                 f"Phone: {identity['ro.product.model']}, Android 12, build {identity['ro.build.version.incremental']}.")
+        self.say(f"Телефон: {identity['ro.product.model']}, SDK {identity['ro.build.version.sdk']}, прошивка {identity['ro.build.version.incremental']}.",
+                 f"Phone: {identity['ro.product.model']}, SDK {identity['ro.build.version.sdk']}, build {identity['ro.build.version.incremental']}.")
         if not prepare_only:
             self.check_bootloader(identity)
-        self.activate_diag()
+        self.prepare_access(identity, allow_fallback=True)
         self.say("Создание бэкапов. Служебный раздел будет полностью прочитан дважды; запись в него ещё не начинается.",
                  "Creating backups. The service partition will be read twice in full; partition writes have not started.")
-        self.tool("backup_chkcode.py", "-o", str(self.backup))
+        self.chkcode_tool("backup", self.backup)
         original = self.original = load_backup(self.backup)
         # An independently validated local copy survives loss/corruption of one
         # backup file. Both copies stay on this host; this is not off-host backup.
         save_backup(self.recovery_backup, original)
         # Identity is a host receipt, not proof of firmware compatibility.
-        self.state = {"version": 1, "serial": self.serial, **identity,
+        self.state = {"version": 1, "serial": self.serial, "access_method": self.access_method, **identity,
                       "sha256": hashlib.sha256(original).hexdigest()}
         self.save_state("backup_ready")
         self.say("Две проверенные копии служебного раздела и журнал сохранены.",
@@ -803,22 +916,32 @@ class Workflow:
             result = self.run(["adb", "-s", self.serial, "shell", "getprop", key])
             if result.stdout.strip() != self.state.get(key):
                 raise Stop(f"Prepared device identity changed: {key}. No marker write.")
-        validate_identity(self.state, lang=self.lang)
+        if self.access_method == "adb_root":
+            identity = {key: self.state[key] for key in ("ro.product.model", "ro.build.version.incremental",
+                        "ro.build.version.security_patch", "ro.build.version.sdk")}
+            self.root_identity(identity)
+            for key, value in identity.items():
+                if value != self.state.get(key):
+                    raise Stop(f"Prepared root device identity changed: {key}. No marker write.")
+        else:
+            validate_identity(self.state, lang=self.lang)
         if self.interactive:
             # Prove the marker is absent before rebooting a resumed device.
-            self.activate_diag()
-            self.tool("verify_chkcode.py", "--backup", str(self.checked_original()))
+            self.prepare_access()
+            self.chkcode_tool("verify", self.checked_original())
             if restart_recovered:
                 previous_phase = self.state["phase"]
                 self.marker_verified = False
                 self.save_state("prepared", previous_phase=previous_phase, reboot_pending=False)
-            identity = {key: self.state[key] for key in ("ro.product.model", "ro.build.version.incremental",
-                        "ro.build.version.security_patch", "ro.build.version.sdk")}
+            identity = {key: value for key, value in self.state.items() if key.startswith("ro.")}
             self.check_bootloader(identity)
-            self.activate_diag()
+            self.prepare_access()
         else:
-            self.wait_prop("sys.usb.config", "diag,modem,adb")
-            self.wait_prop("init.svc.fs_sys_call_diag", "running")
+            if self.access_method == "adb_root":
+                self.ensure_root()
+            else:
+                self.wait_prop("sys.usb.config", "diag,modem,adb")
+                self.wait_prop("init.svc.fs_sys_call_diag", "running")
         # unlock_chkcode independently compares the entire live partition to
         # this checked image before it permits the first marker write.
         self.unlock_from_backup()
@@ -831,7 +954,7 @@ class Workflow:
         with self.signals.defer():
             self.marker_possible = True
             self.save_state("marker_write_started")
-            self.tool("unlock_chkcode.py", "--backup", str(image), "--yes")
+            self.chkcode_tool("mark", image)
             self.marker_verified = True
             self.save_state("marker_verified")
         self.signals.checkpoint()
@@ -866,6 +989,11 @@ class Workflow:
                  "Дождитесь приветственного экрана Android. Папку с бэкапами сохраните.",
                  "Fastboot confirmed flashing the original chkcode and accepted reboot. "
                  "Wait for Android's welcome screen and retain the backup directory.")
+        if self.access_method == "adb_root":
+            self.say("Если Android возвращается в TWRP с init_user0_failed, выполните Wipe → Format Data: "
+                     "после смены состояния загрузчика нужно пересоздать ключи шифрования. Обычного Wipe Data недостаточно.",
+                     "If Android returns to TWRP with init_user0_failed, use Wipe -> Format Data to recreate "
+                     "encryption keys after the bootloader state change. A normal Wipe Data is insufficient.")
 
     def recovery_notice(self):
         if not self.marker_possible and not self.state.get("reboot_pending"):
@@ -917,9 +1045,9 @@ class Workflow:
         identity = {}
         for key in ("ro.product.model", "ro.build.version.incremental", "ro.build.version.security_patch", "ro.build.version.sdk"):
             identity[key] = self.run(["adb", "-s", self.serial, "shell", "getprop", key]).stdout.strip()
-        validate_identity(identity, lang=self.lang)
-        self.activate_diag()
-        self.tool("verify_chkcode.py", "--backup", str(images[0][0]))
+        self.select_access(identity)
+        self.prepare_access(identity, allow_fallback=True)
+        self.chkcode_tool("verify", images[0][0])
         original = images[0][1]
         for path in (self.backup, self.recovery_backup):
             if not path.exists():
@@ -927,7 +1055,7 @@ class Workflow:
         if self.receipt.exists():
             raise Stop("A receipt appeared during inspection. It was not replaced; recheck the saved session.")
         self.original = original
-        self.state = {"version": 1, "serial": self.serial, **identity,
+        self.state = {"version": 1, "serial": self.serial, "access_method": self.access_method, **identity,
                       "sha256": hashlib.sha256(original).hexdigest()}
         self.marker_possible = self.marker_verified = False
         self.save_state("prepared")
@@ -1140,7 +1268,7 @@ def main():
     parser.add_argument("--session", metavar="SERIAL_OR_KEY", help=help_text("выбрать сохранённый сеанс; legacy — старые файлы рядом с программой", "select a saved session; legacy selects older files beside the program"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--unlock", action="store_true", help=help_text("перейти к разблокировке без стартового меню", "open the unlock workflow without the start menu"))
-    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить TWRP в активный слот уже разблокированного A101BM или X01A, включая LineageOS", "install TWRP in the active slot of an already unlocked A101BM or X01A, including LineageOS"))
+    mode.add_argument("--install-recovery", action="store_true", help=help_text("установить TWRP в текущий или выбранный слот разблокированного A101BM/X01A, включая LineageOS", "install TWRP in the current or selected slot of an unlocked A101BM/X01A, including LineageOS"))
     mode.add_argument("--unlock-and-recovery", action="store_true", help=help_text("разблокировать загрузчик, затем установить TWRP на тот же телефон", "unlock the bootloader, then install TWRP on the same phone"))
     mode.add_argument("--check-recovery-image", action="store_true", help=help_text("проверить образ TWRP на ПК, без ADB/USB", "verify the TWRP image on the host, without ADB/USB"))
     parser.add_argument("--recovery-image", type=Path, help=help_text("путь к образу TWRP; для другой сборки выводится предупреждение", "TWRP image path; another build displays a warning"))
@@ -1171,7 +1299,7 @@ def main():
     explicit_mode = any((args.unlock, args.install_recovery, args.unlock_and_recovery, args.preflight, args.recover,
                          args.prepare, args.unlock_prepared, args.list_sessions, args.session))
     if not explicit_mode:
-        print(f"{APP_NAME} {VERSION}")
+        print(f"{APP_NAME} {VERSION}\n")
         print(help_text("1. Только разблокировка загрузчика\n2. Только TWRP (нужен разблокированный загрузчик)\n3. Разблокировка + TWRP\nEnter — выход",
                         "1. Unlock bootloader only\n2. TWRP only (unlocked bootloader required)\n3. Unlock + TWRP\nEnter to exit"))
         try:

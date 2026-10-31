@@ -1,6 +1,7 @@
 """Conservative stock-device admission policy, not hardware compatibility proof."""
 from datetime import date
 import re
+from ui_language import LocalizedValueError
 
 # https://source.android.com/docs/security/bulletin/2024-06-01
 SPL_FIX = date(2024, 6, 1)
@@ -8,14 +9,17 @@ SPL_FIX = date(2024, 6, 1)
 
 def validate_identity(identity, lang="en"):
     def reject(ru, en):
-        raise ValueError(ru if lang == "ru" else en)
+        raise LocalizedValueError(en, ru)
 
     model = identity.get("ro.product.model", "")
     if model not in ("A101BM", "X01A"):
         reject(f"Модель {model!r} не поддерживается. Нужен BALMUDA Phone A101BM или X01A.", f"Unexpected model: {model!r}")
-    if identity.get("ro.build.version.sdk") != "31":
-        reject("Нужен Android 12. Эта система не поддерживается данным способом анлока.",
-               "Only the documented Android 12 stock path (SDK 31) is admitted")
+    sdk = identity.get("ro.build.version.sdk")
+    if sdk != "31":
+        reject(f"Анлок требует штатного Android 12 (SDK 31); телефон сообщает SDK {sdk!r}. "
+               "Установка TWRP на уже разблокированный телефон — пункт 2.",
+               f"Unlocking requires stock Android 12 (SDK 31); the phone reports SDK {sdk!r}. "
+               "To install TWRP on an already unlocked phone, use option 2.")
     build = identity.get("ro.build.version.incremental", "")
     match = re.fullmatch(r"1\.(\d{3})(?:(?:PO|MI)\.\d{4}\.[A-Za-z0-9]+)?", build)
     if match is None or not 220 <= int(match[1]) <= 280:

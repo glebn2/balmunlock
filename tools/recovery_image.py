@@ -4,8 +4,8 @@ from pathlib import Path
 import struct
 from ui_language import LocalizedValueError
 
-IMAGE_NAME = "TWRP-3.7.1_12-BALMUDA_Phone-20261025.img"
-IMAGE_SHA256 = "9e4d0c0707d83a6a3d5ec3fcad4c2f3296996348603817163540ddad7a840702"
+IMAGE_NAME = "TWRP-3.7.1_12-BALMUDA_Phone-20261031.img"
+IMAGE_SHA256 = "acaa0293a06de39f4aca98af61e31fb7f56485828fa3f69179b10011f9993e08"
 IMAGE_SIZE = 100663296
 TWRP_VERSION = "3.7.1_12-BALMUDA_Phone"
 TWRP_MODEL = "Phone"

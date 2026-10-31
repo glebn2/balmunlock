@@ -29,7 +29,7 @@ help. Raw ADB/fastboot output and technical logs retain their original language.
 
 Both **A101BM and X01A** are supported, using the same TWRP image.
 
-Unlock requirements:
+Stock unlock method requirements:
 
 | Parameter | Requirement |
 | --- | --- |
@@ -39,9 +39,21 @@ Unlock requirements:
 | Security patch level | Earlier than 2024-06-01 |
 | Connection | One phone and a working data-capable USB cable |
 
-The utility checks the model and connection automatically. The Android 12
-requirement applies to bootloader unlocking. TWRP can also be installed or
-updated from LineageOS and other custom Android ROMs on an unlocked phone.
+The utility checks the stock method first. If the OS is unsupported or stock
+access preparation fails before backup creation, it checks ADB root instead.
+This allows unlocking again from LineageOS and other custom systems with
+**Rooted debugging**, without restoring stock Android. Enable that option in
+developer settings; root is confirmed through `id -u`. Model, lito platform,
+serial and service-partition size are verified. Magisk/su is not used.
+After a write starts, the access method is fixed by the recovery receipt.
+Both unlock paths erase user data. Root unlock from LineageOS / Android 17 was
+exercised on A101BM. If TWRP starts immediately after unlock confirmation, the
+utility returns to the bootloader to verify unlock and restore the original.
+That automatic handoff has simulation coverage. If Android then returns to
+recovery with `init_user0_failed`, use **Wipe → Format Data** to recreate encryption
+keys after the bootloader state change; normal Wipe Data is insufficient.
+Installing TWRP on an unlocked phone works from
+stock or custom Android and does not require root.
 
 Unlocking, service-partition restoration and Android boot were checked on A101BM
 1.280PO. TWRP supports /data decryption, ADB/MTP, ZIP/sideload installation,
@@ -180,30 +192,36 @@ including LineageOS. Android version and system fingerprint do not restrict
 recovery installation.
 
 Use an unlocked bootloader. The installer automatically detects active slot
-**a or b** and uses its `recovery_a` or `recovery_b`, without switching slots.
+**a or b**. Enter `yes` to install there, or `a` / `b` to select another slot
+and then confirm the new target with `yes`. The utility switches the active
+slot in the bootloader and verifies it before temporarily booting TWRP.
+This also changes the next Android boot slot; the app does not verify that
+Android in the other slot is bootable.
 Connect the phone from running
 Android with USB debugging authorized and select **2 — TWRP only**.
 For direct launch: `.\balmunlock.exe --install-recovery`.
 Confirm with `yes`; choose **Keep Read Only** if TWRP prompts on the phone.
 
-The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261025)**. Root, Magisk,
+The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261031)**. Root, Magisk,
 GSI, another unlock and a factory reset are not required to install it.
 
-The installer temporarily boots TWRP, backs up the active slot's recovery to the
+The installer temporarily boots TWRP, backs up the selected slot's recovery to the
 PC, verifies the backup, flashes the same partition and checks its hash. The slot
 is bound at the start and checked again across mode transitions. The utility then
 finishes with the phone in TWRP. Choose Reboot → System to boot Android.
+If you changed slots, select the original slot first to boot the previous Android.
 Boot, vbmeta and the other slot are left as they are.
 An already installed identical TWRP is not flashed again.
 Installation and updates through the utility were tested on A101BM running
-LineageOS / Android 17 in slot b; slot a support has been checked with simulated devices.
+LineageOS / Android 17 in slot b. Switching b -> a, backup, installation and
+booting the flashed TWRP in slot a were also tested on A101BM. This does not install Android in a.
 
 Backups and logs are saved under `recovery-sessions/device-…/<UTC>-<id>/`.
 Keep a separate copy. When updating TWRP, the backup contains the previous
 recovery, including a custom one.
 
 The Windows package includes the image in `recovery/`. For source launches,
-extract the image from the [TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.5.2/TWRP-3.7.1_12-BALMUDA_Phone-20261025.zip)
+extract the image from the [TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.7.0/TWRP-3.7.1_12-BALMUDA_Phone-20261031.zip)
 into that directory. To update TWRP without updating the utility, replace the
 `.img` in `recovery/`. Keep one image; any filename is accepted. A different
 build shows a warning and can be installed with the usual `yes` confirmation.
@@ -376,7 +394,7 @@ The original method uses CVE-2024-31317 to execute a preparation command as uid=
 
 This fork adds serial binding across ADB/DIAG/fastboot, model/build checks, an early fastboot check, two backups, live-partition validation before writing, a state receipt, a process lock, cancellation handling and bounded automatic rollback. Temporary CVE settings are cleaned up with verification; unfinished cleanup retains a receipt.
 
-The DIAG shell is subject to SELinux and is not universal root. Unlocking restores the original `chkcode`; TWRP installation writes the active slot's recovery (`recovery_a` or `recovery_b`). GSI, boot/system/super or GPT flashing, relocking, slot changes and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
+The DIAG shell is subject to SELinux and is not universal root. The alternative path uses an existing rooted ADB daemon. Unlocking restores the original `chkcode`; TWRP installation writes the selected slot's recovery (`recovery_a` or `recovery_b`). The active slot changes only when explicitly selected during TWRP installation. GSI, boot/system/super or GPT flashing, relocking and manual erases are outside the procedure; upstream describes Virtual A/B corruption and slot-retry exhaustion risks.
 
 Operation progress and verification results are logged. If the connection
 is interrupted, restore it and continue the saved session: the utility uses

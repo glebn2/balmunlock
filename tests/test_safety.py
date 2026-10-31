@@ -175,7 +175,7 @@ class FakeHost:
         elif args in (["adb", "kill-server"], ["adb", "start-server"]):
             pass
         elif args[:4] == ["adb", "-s", "SERIAL", "shell"]:
-            out = self.properties[args[-1]]
+            out = self.properties.get(args[-1], "")
         elif args == ["adb", "-s", "SERIAL", "get-state"]:
             out, code = ("device\n", 0) if self.adb_online else ("", 1)
         elif args == ["fastboot", "devices"]:

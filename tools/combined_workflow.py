@@ -17,7 +17,7 @@ def combined(root, args, workflow_factory, banner_shown=False):
             # Reject unsupported phones and missing artifacts BEFORE an unlock can erase data.
             source = inspect_image(image_path(root, args.recovery_image))
             selected_sha256 = file_hash(source)
-            recovery.select_android(require_stock=True)
+            recovery.select_android()
             expected_serial = recovery.serial
             flow = workflow_factory(args.lang, interactive=not args.non_interactive,
                                     verbose=args.verbose)
