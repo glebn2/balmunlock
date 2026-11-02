@@ -52,6 +52,7 @@ class RecoveryInstaller:
         self.slot = None
         self.initial_slot = None
         self.slot_switch_pending = False
+        self.both_slots = False
         self.device_model = None
         self.android_build = None
         self.android_details = {}
@@ -171,6 +172,29 @@ class RecoveryInstaller:
     def block(self):
         return "/dev/block/by-name/" + self.partition
 
+    @property
+    def partitions(self):
+        if self.both_slots:
+            # Update the inactive recovery first, keeping the active one until last.
+            other = "b" if self.slot == "a" else "a"
+            return ["recovery_" + other, self.partition]
+        return [self.partition]
+
+    def partition_block(self, partition):
+        if partition not in self.partitions:
+            self.fail("Раздел не входит в подтверждённый выбор recovery.",
+                      "Partition is outside the confirmed recovery selection.")
+        return "/dev/block/by-name/" + partition
+
+    def save_partition(self, partition, phase, **fields):
+        self.partition_block(partition)
+        records = self.state.setdefault("partitions", {})
+        records.setdefault(partition, {}).update(fields, phase=phase)
+        if fields.get("flash_may_have_changed"):
+            self.state["flash_may_have_changed"] = True
+        # Retain the 0.7.0 single-partition receipt fields for manual restoration.
+        self.save(phase, current_partition=partition, **(fields if not self.both_slots else {}))
+
     def android_identity(self, require_stock=False):
         props = self.properties()
         # Custom ROM branding and SDK do not identify the physical device.
@@ -249,12 +273,13 @@ class RecoveryInstaller:
         for key, value in expected.items():
             if self.getvar(key) != value:
                 self.fail(f"Не подходит состояние загрузчика: {key}.", f"Unsupported bootloader state: {key}.")
-        try:
-            size = int(self.getvar("partition-size:" + self.partition), 16)
-        except ValueError as error:
-            raise RecoveryError("Invalid recovery partition size", "Некорректный размер раздела recovery") from error
-        if size != IMAGE_SIZE:
-            self.fail(f"Размер {self.partition} отличается от ожидаемого.", f"Unexpected {self.partition} size.")
+        for partition in self.partitions:
+            try:
+                size = int(self.getvar("partition-size:" + partition), 16)
+            except ValueError as error:
+                raise RecoveryError("Invalid recovery partition size", "Некорректный размер раздела recovery") from error
+            if size != IMAGE_SIZE:
+                self.fail(f"Размер {partition} отличается от ожидаемого.", f"Unexpected {partition} size.")
         if allow_slot_switch and self.slot_switch_pending:
             self.say(f"Переключаю активный слот {self.initial_slot} → {self.slot}.",
                      f"Switching the active slot {self.initial_slot} -> {self.slot}.")
@@ -289,24 +314,28 @@ class RecoveryInstaller:
             self.fail("Выбранный образ изменился после подтверждения. Установка остановлена.",
                       "Selected image changed after confirmation. Installation stopped.")
 
-    def block_hash(self):
-        output = self.adb("shell", "sha256sum", self.block, timeout=120).stdout
-        match = re.fullmatch(r"([0-9a-fA-F]{64})\s+" + re.escape(self.block) + r"\s*", output)
+    def block_hash(self, partition=None):
+        partition = partition or self.partition
+        block = self.partition_block(partition)
+        output = self.adb("shell", "sha256sum", block, timeout=120).stdout
+        match = re.fullmatch(r"([0-9a-fA-F]{64})\s+" + re.escape(block) + r"\s*", output)
         if match is None:
-            self.fail(f"Не удалось прочитать хеш {self.partition}.", f"Cannot read {self.partition} SHA-256.")
+            self.fail(f"Не удалось прочитать хеш {partition}.", f"Cannot read {partition} SHA-256.")
         return match[1].lower()
 
-    def backup(self):
-        if self.adb("shell", "blockdev", "--getsize64", self.block).stdout.strip() != str(IMAGE_SIZE):
-            self.fail(f"Не подтверждён размер исходного {self.partition}.", f"Original {self.partition} size not confirmed.")
-        before = self.block_hash()
+    def backup(self, partition=None):
+        partition = partition or self.partition
+        block = self.partition_block(partition)
+        if self.adb("shell", "blockdev", "--getsize64", block).stdout.strip() != str(IMAGE_SIZE):
+            self.fail(f"Не подтверждён размер исходного {partition}.", f"Original {partition} size not confirmed.")
+        before = self.block_hash(partition)
         temporary = "/tmp/balmunlock-recovery-" + uuid.uuid4().hex + ".img"
-        self.adb("shell", f"dd if={self.block} of={temporary} bs=1048576 count=96", timeout=120)
+        self.adb("shell", f"dd if={block} of={temporary} bs=1048576 count=96", timeout=120)
         staged = self.adb("shell", "sha256sum", temporary, timeout=120).stdout.split()
-        if staged != [before, temporary] or self.block_hash() != before:
+        if staged != [before, temporary] or self.block_hash(partition) != before:
             self.fail("Исходный recovery изменился или прочитан с ошибкой. Запись запрещена.",
                       "Original recovery changed or was read incorrectly. No flash allowed.")
-        target = self.folder / f"{self.partition}.before-install.img.part"
+        target = self.folder / f"{partition}.before-install.img.part"
         self.adb("pull", temporary, str(target), timeout=180)
         if target.stat().st_size != IMAGE_SIZE or file_hash(target) != before:
             self.fail("Бэкап на ПК не совпадает с разделом. Запись запрещена.",
@@ -314,11 +343,20 @@ class RecoveryInstaller:
         backup = target.with_suffix("")
         target.rename(backup)
         (backup.with_suffix(".img.sha256")).write_text(f"{before}  {backup.name}\n", encoding="ascii")
-        self.save("backup_verified", original_sha256=before, backup=backup.name,
+        self.save_partition(partition, "backup_verified", original_sha256=before, backup=backup.name,
+                  original_bytes=IMAGE_SIZE,
                   original_was_pinned_twrp=(before == IMAGE_SHA256),
                   original_matches_selected_image=(before == self.image_hash))
         self.adb("shell", "rm", temporary)
         return before
+
+    def check_backups(self):
+        for partition in self.partitions:
+            record = self.state["partitions"][partition]
+            path = self.folder / record["backup"]
+            if path.stat().st_size != IMAGE_SIZE or file_hash(path) != record["original_sha256"]:
+                self.fail(f"Бэкап {partition} на ПК изменился. Запись запрещена.",
+                          f"The {partition} host backup changed. No flash allowed.")
 
     def create_folder(self):
         base = self.root / "recovery-sessions"
@@ -334,7 +372,9 @@ class RecoveryInstaller:
                   source_filename=self.source_name, image_file="recovery.img",
                   bundled_image=(self.image_hash == IMAGE_SHA256),
                   initial_slot=self.initial_slot, slot_switch_requested=self.slot_switch_pending,
-                  partition=self.partition, block_device=self.block, **self.android_details,
+                  target_mode="both" if self.both_slots else "single", target_partitions=self.partitions,
+                  **({} if self.both_slots else {"partition": self.partition, "block_device": self.block}),
+                  **self.android_details,
                   **({"stock_model": self.device_model, "stock_build": self.android_build} if self.is_stock else {}))
 
     def select_android(self, require_stock=False):
@@ -375,28 +415,36 @@ class RecoveryInstaller:
                      "Confirmation below authorizes installing the selected file.")
         android_label = self.android_details["android_release"] or "SDK " + self.android_details["android_sdk"]
         while True:
-            self.say(f"Установка TWRP: {self.device_model}, Android {android_label}, слот {self.slot}. "
-                     f"Сохраню recovery_{self.slot} на ПК, затем заменю только {self.partition}. Сохраните важные данные отдельно.",
-                     f"Install TWRP: {self.device_model}, Android {android_label}, slot {self.slot}. "
-                     f"Back up recovery_{self.slot} to the PC, then replace {self.partition} only. Keep important data separately.")
+            if self.both_slots:
+                self.say(f"Установка TWRP: {self.device_model}, Android {android_label}, оба recovery: recovery_a и recovery_b. "
+                         f"Сначала сохраню оба оригинала на ПК. Активный слот {self.slot} не изменится. Сохраните важные данные отдельно.",
+                         f"Install TWRP: {self.device_model}, Android {android_label}, both recovery_a and recovery_b. "
+                         f"Back up both originals before flashing. Active slot {self.slot} stays unchanged. Keep important data separately.")
+            else:
+                self.say(f"Установка TWRP: {self.device_model}, Android {android_label}, слот {self.slot}. "
+                         f"Сохраню recovery_{self.slot} на ПК, затем заменю только {self.partition}. Сохраните важные данные отдельно.",
+                         f"Install TWRP: {self.device_model}, Android {android_label}, slot {self.slot}. "
+                         f"Back up recovery_{self.slot} to the PC, then replace {self.partition} only. Keep important data separately.")
             if self.slot != self.initial_slot:
                 self.say(f"Активный слот будет переключён с {self.initial_slot} на {self.slot}. "
                          "Это также меняет слот следующей загрузки Android; его работоспособность программа не проверяет.",
                          f"The active slot will change from {self.initial_slot} to {self.slot}. "
                          "This also selects the next Android boot slot; the app does not check whether that Android boots.")
-            self.say(f"yes — установить в {self.slot}; a/b — выбрать слот; Enter/N — выход.",
-                     f"yes — install in {self.slot}; a/b — choose a slot; Enter/N — exit.")
+            target_label = "both" if self.both_slots else self.slot
+            self.say(f"yes — установить в {target_label}; a/b/both — выбрать слоты; Enter/N — выход.",
+                     f"yes — install in {target_label}; a/b/both — choose slots; Enter/N — exit.")
             answer = input().strip().lower()
             if answer == "yes":
                 break
             if answer in ("", "n", "no", "нет"):
                 return 0
-            if answer in ("a", "b"):
-                self.slot = answer
+            if answer in ("a", "b", "both"):
+                self.both_slots = answer == "both"
+                self.slot = self.initial_slot if self.both_slots else answer
                 self.slot_switch_pending = self.slot != self.initial_slot
                 self.android_details["slot"] = self.slot
                 continue
-            self.say("Введите yes, a, b или нажмите Enter.", "Enter yes, a, b, or press Enter to exit.")
+            self.say("Введите yes, a, b, both или нажмите Enter.", "Enter yes, a, b, both, or press Enter to exit.")
         self.create_folder()
         self.say(f"Бэкап и журнал: {self.folder}", f"Backup and log: {self.folder}")
         # Use an immutable per-run copy, so changing the source during the round-trip cannot change what is flashed.
@@ -415,31 +463,41 @@ class RecoveryInstaller:
         self.save("ram_boot_requested")
         self.fb("boot", str(image), timeout=120)
         self.check_twrp()
-        original = self.backup()
-        if original != self.image_hash:
+        originals = {partition: self.backup(partition) for partition in self.partitions}
+        to_flash = [partition for partition in self.partitions if originals[partition] != self.image_hash]
+        if to_flash:
+            self.check_backups()
             self.adb("reboot", "bootloader")
-            self.check_bootloader()
-            self.check_selected_image(image)
-            # The global lock, no timer, and deferred signals cover the writer AND the durable receipt.
-            self.say(f"Оригинал сохранён. Записываю {self.partition}; не отключайте кабель.",
-                     f"Original backed up. Writing {self.partition}; do not disconnect USB.")
-            self.signals.checkpoint()
-            with self.signals.defer():
-                self.save("flash_started", flash_may_have_changed=True)
-                self.fb("flash", self.partition, str(image), timeout=None)
-                self.save("flash_command_completed")
-            self.signals.checkpoint()
+            for partition in to_flash:
+                self.check_bootloader()
+                self.check_selected_image(image)
+                self.check_backups()
+                self.say(f"Оригинал сохранён. Записываю {partition}; не отключайте кабель.",
+                         f"Original backed up. Writing {partition}; do not disconnect USB.")
+                self.signals.checkpoint()
+                # Protect each writer AND its durable per-partition receipt.
+                with self.signals.defer():
+                    self.save_partition(partition, "flash_started", flash_may_have_changed=True)
+                    self.fb("flash", partition, str(image), timeout=None)
+                    self.save_partition(partition, "flash_command_completed")
+                self.signals.checkpoint()
             self.fb("reboot", "recovery")
             self.check_twrp()
         else:
             self.say("Этот TWRP уже установлен; повторной записи не будет.",
                      "This TWRP is already installed; no repeat flash.")
-        if self.block_hash() != self.image_hash:
-            self.fail(f"Хеш {self.partition} после установки не совпал. Не продолжайте установку.",
-                      f"Installed {self.partition} hash mismatch. Stop here.")
-        self.save("partition_verified", installed_sha256=self.image_hash)
-        self.save("completed", final_mode="recovery", recovery_ready=True)
-        if self.slot != self.initial_slot:
+        for partition in self.partitions:
+            if self.block_hash(partition) != self.image_hash:
+                self.fail(f"Хеш {partition} после установки не совпал. Не продолжайте установку.",
+                          f"Installed {partition} hash mismatch. Stop here.")
+            self.save_partition(partition, "partition_verified", installed_sha256=self.image_hash)
+        self.save("completed", final_mode="recovery", recovery_ready=True, verified_partitions=self.partitions)
+        if self.both_slots:
+            self.say(f"Оба recovery проверены. Телефон остаётся в TWRP, активный слот {self.slot} не изменён. "
+                     "Для загрузки Android выберите Reboot → System. Оба бэкапа recovery сохранены.",
+                     f"Both recovery partitions verified. Phone remains in TWRP; active slot {self.slot} is unchanged. "
+                     "Choose Reboot -> System to boot Android. Both recovery backups retained.")
+        elif self.slot != self.initial_slot:
             self.say(f"{self.partition} проверен. Телефон остаётся в TWRP, активный слот {self.slot}. "
                      f"Прежний Android находится в слоте {self.initial_slot}; перед его запуском верните этот активный слот. "
                      "Бэкап recovery сохранён.",

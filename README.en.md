@@ -202,6 +202,12 @@ Android with USB debugging authorized and select **2 — TWRP only**.
 For direct launch: `.\balmunlock.exe --install-recovery`.
 Confirm with `yes`; choose **Keep Read Only** if TWRP prompts on the phone.
 
+To install both recovery partitions, enter **`both`**, then **`yes`**.
+Use this to prepare for OTA slot switching. The active slot stays unchanged.
+The app checks both partition sizes and backs up both originals before any flash,
+then writes differing partitions, inactive first, and verifies both hashes.
+`both` is available through menu options 2 and 3.
+
 The included image is **TWRP 3.7.1_12-BALMUDA_Phone (20261031)**. Root, Magisk,
 GSI, another unlock and a factory reset are not required to install it.
 
@@ -210,15 +216,20 @@ PC, verifies the backup, flashes the same partition and checks its hash. The slo
 is bound at the start and checked again across mode transitions. The utility then
 finishes with the phone in TWRP. Choose Reboot → System to boot Android.
 If you changed slots, select the original slot first to boot the previous Android.
-Boot, vbmeta and the other slot are left as they are.
+Only the selected recovery partitions are flashed: `recovery_a` and `recovery_b` in `both` mode.
 An already installed identical TWRP is not flashed again.
 Installation and updates through the utility were tested on A101BM running
 LineageOS / Android 17 in slot b. Switching b -> a, backup, installation and
 booting the flashed TWRP in slot a were also tested on A101BM. This does not install Android in a.
+`both` is tested with independent simulated partitions, including failures between
+writes; no separate hardware test of this mode is claimed.
 
 Backups and logs are saved under `recovery-sessions/device-…/<UTC>-<id>/`.
 Keep a separate copy. When updating TWRP, the backup contains the previous
 recovery, including a custom one.
+`both` saves `recovery_a.before-install.img` and `recovery_b.before-install.img`
+with separate SHA-256 files. Per-partition results and write state are under
+`partitions` in `state.json`; overall success requires both partitions to verify.
 
 The Windows package includes the image in `recovery/`. For source launches,
 extract the image from the [TWRP archive](https://github.com/glebn2/balmunlock/releases/download/v0.7.0/TWRP-3.7.1_12-BALMUDA_Phone-20261031.zip)

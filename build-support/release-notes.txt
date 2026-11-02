@@ -1,31 +1,23 @@
-balmunlock 0.7.0 — ADB root unlock and TWRP slot selection
+balmunlock 0.7.1 — TWRP in both slots for OTA
 
-The stock unlock path is checked first. Unsupported systems, or a failure of
-stock access preparation before backups, can use an existing rooted ADB daemon.
-Enable Rooted debugging in LineageOS developer settings. The utility verifies
-UID 0, the BALMUDA/lito identity, serial and the fixed chkcode partition size.
-It preserves two checked originals, verifies the marker and restores the original
-through the existing fastboot flow. If TWRP starts after unlock confirmation,
-the app returns to the bootloader and confirms unlocked state before restoring.
-Root does not remove the unlock data wipe. If Android returns to recovery with
-init_user0_failed, use Wipe -> Format Data to recreate encryption keys.
-No access-method fallback occurs after backup creation or a marker write.
+Enter both, then yes in the TWRP confirmation to install recovery_a and recovery_b
+without changing the active slot. Available in menu options 2 and 3.
+The current-slot default and explicit a/b selection remain available.
 
-Both TWRP menu options offer the current slot by default. Enter a or b before
-confirming to select another slot. The utility verifies bootloader state and
-snapshot status, switches the active slot, confirms it, then backs up, flashes
-and reads back only the chosen recovery partition. This also changes the next
-Android boot slot; Android/super in the other slot are not prepared or verified.
-An unexpected slot change stops the operation. There is no automatic switch back.
+Both partition sizes are checked and both full originals are backed up and
+verified before any flash. Differing partitions are written inactive first;
+identical images are skipped. Both final SHA-256 values must match before success.
+Each partition has its own backup, hash and progress in state.json. A partial
+failure stops without automatically retrying or restoring either partition.
 
-Explicit b -> a slot switching, backup, installation and booting the flashed TWRP
-were tested on A101BM. Root unlock was exercised on A101BM; the automatic recovery
-handoff has simulation coverage. Existing slot b install/update testing also applies.
-Bundled TWRP is updated to 3.7.1_12-BALMUDA_Phone (20261031), with the lptools fix
-for creating an empty logical partition. Image structure, patched ramdisk binary
-and unchanged stock kernel/DTB/DTBO are checked on the host; this new image has
-not been hardware-tested separately. Image SHA-256:
+Both mode is covered by host tests with independent partitions and failure
+injection; it was not separately hardware-tested. Single-slot a/b installation
+was previously tested on A101BM. The Windows ZIP contains only the utility,
+runtime dependencies, USB preset and bundled TWRP 20261031. Keep the sessions/
+and recovery-sessions/ backup directories.
+
+The existing stock and ADB-root unlock paths are unchanged from 0.7.0.
+Unlocking erases user data; installing TWRP on an unlocked phone does not.
+
+Bundled TWRP image SHA-256:
 acaa0293a06de39f4aca98af61e31fb7f56485828fa3f69179b10011f9993e08
-
-The ZIP contains only the utility, runtime dependencies, USB driver preset and
-recovery image. Keep sessions/ and recovery-sessions/. Completion stays in TWRP.

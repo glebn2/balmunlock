@@ -1068,6 +1068,13 @@ class CombinedTests(unittest.TestCase):
         self.assertEqual(len(self.writes()), 1)
         self.assertEqual(self.flow.state["phase"], "completed")
 
+    def test_both_after_fresh_unlock_keeps_slot_and_installs_two_recoveries(self):
+        with patch("builtins.input", side_effect=["yes", "both", "yes"]):
+            self.assertEqual(self.combo(fresh=True), 0)
+        self.assertEqual(self.host.slot, "b")
+        self.assertEqual(set(self.flow.state["verified_partitions"]), {"recovery_a", "recovery_b"})
+        self.assertEqual(len(self.writes()), 2)
+
     def test_fresh_unlock_on_slot_a_installs_only_recovery_a(self):
         self.host.use_slot("a")
         before_b = self.host.partitions["recovery_b"]
