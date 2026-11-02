@@ -253,7 +253,7 @@ class FakeDevice:
             elif command[0] == "pull":
                 Path(command[2]).write_bytes(b"bad" if self.pull_bad else self.temporary[command[1]])
             elif command[:2] == ["shell", "rm"]:
-                del self.temporary[command[2]]
+                self.temporary.pop(command[-1], None)
             else:
                 raise AssertionError(args)
         return subprocess.CompletedProcess(args, rc, out, err)

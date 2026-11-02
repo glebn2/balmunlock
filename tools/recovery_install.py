@@ -27,6 +27,10 @@ class RecoveryError(RuntimeError):
         self.ru = ru
 
 
+class RecoveryReadInterrupted(RecoveryError):
+    """A retryable ADB disconnect during an explicitly read-only operation."""
+
+
 def single_value(output, name):
     values = set(re.findall(r"^\s*(?:\(bootloader\)\s*)?" + re.escape(name)
                             + r":\s*(\S+)\s*$", output, re.M))
@@ -88,7 +92,7 @@ class RecoveryInstaller:
             os.fsync(stream.fileno())
         os.replace(temporary, self.folder / "state.json")
 
-    def run(self, args, timeout=15, check=True):
+    def run(self, args, timeout=15, check=True, read_only=False):
         self.signals.checkpoint()
         try:
             result = subprocess.run(list(map(str, args)), cwd=self.root, env=self.env,
@@ -101,6 +105,13 @@ class RecoveryInstaller:
         if self.verbose:
             print(result.stdout + result.stderr, end="", flush=True)
         if check and result.returncode:
+            if (read_only and str(args[0]) == "adb" and
+                    (result.returncode == 255 or re.search(
+                        r"device offline|device .* not found|no devices/emulators found|"
+                        r"error: closed|protocol fault|connection (?:reset|closed)",
+                        result.stdout + "\n" + result.stderr, re.I))):
+                raise RecoveryReadInterrupted("ADB disconnected during a read-only operation.",
+                                              "Связь ADB прервалась во время чтения.")
             self.fail("Команда завершилась с ошибкой. Подробности в журнале.", "Command failed. See the operation log.")
         return result
 
@@ -110,10 +121,42 @@ class RecoveryInstaller:
     def fb(self, *args, **kwargs):
         return self.run(["fastboot", "-s", self.serial, *args], **kwargs)
 
+    def adb_read(self, *args, timeout=15):
+        """Retry only known reads, host .part transfers and private RAM-file operations."""
+        blocks = {self.partition_block(partition) for partition in self.partitions}
+        temporary = r"/tmp/balmunlock-recovery-[0-9a-f]{32}\.img"
+        safe = False
+        if len(args) == 4 and args[:3] == ("shell", "blockdev", "--getsize64"):
+            safe = args[3] in blocks
+        elif len(args) == 3 and args[:2] == ("shell", "sha256sum"):
+            safe = args[2] in blocks or re.fullmatch(temporary, args[2]) is not None
+        elif len(args) == 2 and args[0] == "shell":
+            match = re.fullmatch(r"dd if=(\S+) of=(" + temporary + r") bs=1048576 count=96", args[1])
+            safe = match is not None and match[1] in blocks
+        elif len(args) == 3 and args[0] == "pull":
+            destination = Path(args[2]).resolve()
+            safe = (re.fullmatch(temporary, args[1]) is not None and self.folder is not None and
+                    destination.parent == self.folder and destination.name in
+                    {partition + ".before-install.img.part" for partition in self.partitions})
+        elif len(args) == 4 and args[:3] == ("shell", "rm", "-f"):
+            safe = re.fullmatch(temporary, args[3]) is not None
+        if not safe:
+            self.fail("Команда не разрешена для повтора чтения.", "Command is not allowed for read-only retry.")
+        for attempt in range(3):
+            try:
+                return self.adb(*args, timeout=timeout, read_only=True)
+            except RecoveryReadInterrupted:
+                if attempt == 2:
+                    raise
+                self.say("Связь ADB прервалась. Жду TWRP, повторно проверю телефон и слот, затем повторю только чтение.",
+                         "ADB disconnected. Waiting for TWRP; rechecking the phone and slot before retrying the read only.")
+                self.log(f"Read-only ADB retry {attempt + 1}/2: {args[0:2]}")
+                self.check_twrp(timeout=30)
+
     def connections(self, waiting=False):
         found = {}
         for program in ("adb", "fastboot"):
-            output = self.run([program, "devices"], timeout=10).stdout
+            output = self.run([program, "devices"], timeout=10, read_only=(program == "adb")).stdout
             for line in output.splitlines():
                 if not line.strip() or line.startswith(("List of devices", "*")):
                     continue
@@ -148,8 +191,8 @@ class RecoveryInstaller:
                           f"Timed out waiting for {mode}. Check USB and the driver.")
             time.sleep(2)
 
-    def properties(self):
-        return parse_properties(self.adb("shell", "getprop").stdout)
+    def properties(self, read_only=False):
+        return parse_properties(self.adb("shell", "getprop", read_only=read_only).stdout)
 
     def bind_slot(self, suffix):
         if suffix not in ("_a", "_b"):
@@ -293,16 +336,28 @@ class RecoveryInstaller:
                 self.save("slot_switch_verified", active_slot=self.slot)
             self.signals.checkpoint()
 
-    def check_twrp(self):
-        self.wait("recovery", 120)
-        props = self.properties()
+    def check_twrp(self, timeout=120):
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                self.wait("recovery", max(1, deadline - time.monotonic()))
+                self.check_twrp_identity()
+                return
+            except RecoveryReadInterrupted:
+                if time.monotonic() >= deadline:
+                    raise
+                self.log("ADB is restarting while checking TWRP identity; waiting without device changes.")
+                time.sleep(1)
+
+    def check_twrp_identity(self):
+        props = self.properties(read_only=True)
         for key, value in {"ro.boot.serialno": self.serial, "ro.boot.slot_suffix": "_" + self.slot}.items():
             if props.get(key) != value:
                 self.fail(f"Recovery: не совпадает {key}.", f"Recovery identity mismatch: {key}.")
         version = props.get("ro.twrp.version", "")
         if not version.strip():
             self.fail("TWRP не сообщил свою версию.", "TWRP did not report its version.")
-        if self.adb("shell", "id", "-u").stdout.strip() != "0":
+        if self.adb("shell", "id", "-u", read_only=True).stdout.strip() != "0":
             self.fail("В TWRP нет доступа для чтения раздела. Новые права не запрашиваются.",
                       "TWRP cannot read the partition. No privilege preparation will be attempted.")
         self.state.update(twrp_version=version, twrp_fingerprint=props.get("ro.vendor.build.fingerprint", ""))
@@ -317,7 +372,7 @@ class RecoveryInstaller:
     def block_hash(self, partition=None):
         partition = partition or self.partition
         block = self.partition_block(partition)
-        output = self.adb("shell", "sha256sum", block, timeout=120).stdout
+        output = self.adb_read("shell", "sha256sum", block, timeout=120).stdout
         match = re.fullmatch(r"([0-9a-fA-F]{64})\s+" + re.escape(block) + r"\s*", output)
         if match is None:
             self.fail(f"Не удалось прочитать хеш {partition}.", f"Cannot read {partition} SHA-256.")
@@ -326,17 +381,17 @@ class RecoveryInstaller:
     def backup(self, partition=None):
         partition = partition or self.partition
         block = self.partition_block(partition)
-        if self.adb("shell", "blockdev", "--getsize64", block).stdout.strip() != str(IMAGE_SIZE):
+        if self.adb_read("shell", "blockdev", "--getsize64", block).stdout.strip() != str(IMAGE_SIZE):
             self.fail(f"Не подтверждён размер исходного {partition}.", f"Original {partition} size not confirmed.")
         before = self.block_hash(partition)
         temporary = "/tmp/balmunlock-recovery-" + uuid.uuid4().hex + ".img"
-        self.adb("shell", f"dd if={block} of={temporary} bs=1048576 count=96", timeout=120)
-        staged = self.adb("shell", "sha256sum", temporary, timeout=120).stdout.split()
+        self.adb_read("shell", f"dd if={block} of={temporary} bs=1048576 count=96", timeout=120)
+        staged = self.adb_read("shell", "sha256sum", temporary, timeout=120).stdout.split()
         if staged != [before, temporary] or self.block_hash(partition) != before:
             self.fail("Исходный recovery изменился или прочитан с ошибкой. Запись запрещена.",
                       "Original recovery changed or was read incorrectly. No flash allowed.")
         target = self.folder / f"{partition}.before-install.img.part"
-        self.adb("pull", temporary, str(target), timeout=180)
+        self.adb_read("pull", temporary, str(target), timeout=180)
         if target.stat().st_size != IMAGE_SIZE or file_hash(target) != before:
             self.fail("Бэкап на ПК не совпадает с разделом. Запись запрещена.",
                       "Host backup does not match the partition. No flash allowed.")
@@ -347,7 +402,7 @@ class RecoveryInstaller:
                   original_bytes=IMAGE_SIZE,
                   original_was_pinned_twrp=(before == IMAGE_SHA256),
                   original_matches_selected_image=(before == self.image_hash))
-        self.adb("shell", "rm", temporary)
+        self.adb_read("shell", "rm", "-f", temporary)
         return before
 
     def check_backups(self):

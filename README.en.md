@@ -221,8 +221,10 @@ An already installed identical TWRP is not flashed again.
 Installation and updates through the utility were tested on A101BM running
 LineageOS / Android 17 in slot b. Switching b -> a, backup, installation and
 booting the flashed TWRP in slot a were also tested on A101BM. This does not install Android in a.
-`both` is tested with independent simulated partitions, including failures between
-writes; no separate hardware test of this mode is claimed.
+`both` was tested on A101BM running Android 17 with slot `a` active:
+both recovery partitions were flashed and verified, and the active slot was preserved.
+If ADB disconnects during a read, the app rechecks the phone and slot before
+retrying only the read. Flash commands are never retried automatically.
 
 Backups and logs are saved under `recovery-sessions/device-…/<UTC>-<id>/`.
 Keep a separate copy. When updating TWRP, the backup contains the previous

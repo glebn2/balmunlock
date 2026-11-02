@@ -1,23 +1,22 @@
-balmunlock 0.7.1 — TWRP in both slots for OTA
+balmunlock 0.7.2 — handle ADB restarts during TWRP backup
 
-Enter both, then yes in the TWRP confirmation to install recovery_a and recovery_b
-without changing the active slot. Available in menu options 2 and 3.
-The current-slot default and explicit a/b selection remain available.
+Fixes an interrupted recovery backup when TWRP restarts ADB during USB/MTP
+initialization. Read-only operations have bounded retries after rechecking
+the same phone, active slot and TWRP root access. Partial copies must still
+pass the full size and SHA-256 checks. Flash commands are never retried.
 
-Both partition sizes are checked and both full originals are backed up and
-verified before any flash. Differing partitions are written inactive first;
-identical images are skipped. Both final SHA-256 values must match before success.
-Each partition has its own backup, hash and progress in state.json. A partial
-failure stops without automatically retrying or restoring either partition.
+The both option installs TWRP in recovery_a and recovery_b without changing
+the active slot. Both full originals are saved and verified before any flash.
+Hardware-tested on A101BM running Android 17 with slot a active: the ADB
+restart was handled, both partitions were flashed and both hashes verified.
+354 host tests pass, including disconnect and partial-copy failure cases.
 
-Both mode is covered by host tests with independent partitions and failure
-injection; it was not separately hardware-tested. Single-slot a/b installation
-was previously tested on A101BM. The Windows ZIP contains only the utility,
-runtime dependencies, USB preset and bundled TWRP 20261031. Keep the sessions/
-and recovery-sessions/ backup directories.
-
-The existing stock and ADB-root unlock paths are unchanged from 0.7.0.
+Available through menu options 2 and 3. Current-slot default and explicit a/b
+selection remain available. The unlock paths are unchanged.
 Unlocking erases user data; installing TWRP on an unlocked phone does not.
+
+The Windows ZIP contains only the utility, runtime dependencies, USB preset
+and bundled TWRP 20261031. Keep sessions/ and recovery-sessions/ backups.
 
 Bundled TWRP image SHA-256:
 acaa0293a06de39f4aca98af61e31fb7f56485828fa3f69179b10011f9993e08
